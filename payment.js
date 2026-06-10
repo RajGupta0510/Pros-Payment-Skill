@@ -182,12 +182,27 @@ async function sendPayment({ to, amount, memo }) {
       const val = ethers.parseEther(amount.toString());
       const data = memo ? ethers.hexlify(ethers.toUtf8Bytes(memo)) : '0x';
 
-      // 5. Submit transaction
-      tx = await currentWallet.sendTransaction({
+      const txParams = {
         to,
         value: val,
         data
-      });
+      };
+
+      // Query fee data and apply a small base/priority fee markup to prevent mempool delays
+      try {
+        const feeData = await currentWallet.provider.getFeeData();
+        if (feeData.maxFeePerGas) {
+          txParams.maxFeePerGas = feeData.maxFeePerGas * 12n / 10n;
+          txParams.maxPriorityFeePerGas = (feeData.maxPriorityFeePerGas ?? ethers.parseUnits('1', 'gwei')) * 12n / 10n;
+        } else if (feeData.gasPrice) {
+          txParams.gasPrice = feeData.gasPrice * 12n / 10n;
+        }
+      } catch (feeErr) {
+        // Fallback to auto-estimation if RPC feeData query fails
+      }
+
+      // 5. Submit transaction
+      tx = await currentWallet.sendTransaction(txParams);
 
       recordHistory(tx.hash, {
         recipient: to,
@@ -233,7 +248,7 @@ async function sendPayment({ to, amount, memo }) {
       let mappedErr = err;
       if (!(err instanceof PaymentSkillError)) {
         if (err.code === 'TIMEOUT' || err.message.includes('timeout')) {
-          mappedErr = new PaymentSkillError('TIMEOUT', `Transaction Timeout Error: Payment submission succeeded but confirmation timed out after 60 seconds. TxHash: ${truncateInput(err.transactionHash || 'unknown')}`, true);
+          mappedErr = new PaymentSkillError('TIMEOUT', `Transaction Timeout Error: Payment submission succeeded but confirmation timed out after 60 seconds. TxHash: ${truncateInput(failedHash || 'unknown')}`, true);
         } else {
           mappedErr = new PaymentSkillError('EXECUTION_REVERTED', `Payment Execution Error: ${sanitizeErrorMessage(err.message)}`, false);
         }
@@ -291,18 +306,37 @@ async function sendBatchPayment({ payments }) {
       // 5. Submit transactions sequentially using manual nonce increment to avoid collisions
       let currentNonce = await currentWallet.getNonce();
 
+      // Query fee data once for the batch to avoid repeated RPC round-trips
+      let feeData;
+      try {
+        feeData = await currentWallet.provider.getFeeData();
+      } catch (feeErr) {
+        // Fallback to auto-estimation if RPC feeData query fails
+      }
+
       for (let i = 0; i < payments.length; i++) {
         const payment = payments[i];
         const val = ethers.parseEther(payment.amount.toString());
         const data = payment.memo ? ethers.hexlify(ethers.toUtf8Bytes(payment.memo)) : '0x';
 
+        const txParams = {
+          to: payment.to,
+          value: val,
+          data,
+          nonce: currentNonce++
+        };
+
+        if (feeData) {
+          if (feeData.maxFeePerGas) {
+            txParams.maxFeePerGas = feeData.maxFeePerGas * 12n / 10n;
+            txParams.maxPriorityFeePerGas = (feeData.maxPriorityFeePerGas ?? ethers.parseUnits('1', 'gwei')) * 12n / 10n;
+          } else if (feeData.gasPrice) {
+            txParams.gasPrice = feeData.gasPrice * 12n / 10n;
+          }
+        }
+
         try {
-          const tx = await currentWallet.sendTransaction({
-            to: payment.to,
-            value: val,
-            data,
-            nonce: currentNonce++
-          });
+          const tx = await currentWallet.sendTransaction(txParams);
           submittedTxes.push({ tx, payment });
 
           recordHistory(tx.hash, {
