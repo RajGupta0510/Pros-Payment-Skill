@@ -7,7 +7,44 @@ Autonomous AI agents require a deterministic and resilient mechanism to interact
 
 ---
 
+## AI Agent Call Flow
+
+Here is a step-by-step text-based flow diagram showing how an AI Agent or Orchestrator interacts with this Skill:
+
+```text
+       [AI Agent / Orchestrator]
+                  │
+                  ├─► 1. Query Agent Schema (schema.json)
+                  │      │
+                  │      └─► Discovers available tools (sendPayment, checkBalance, estimatePaymentCost, etc.)
+                  │
+                  ├─► 2. Estimate Costs (estimatePaymentCost)
+                  │      │
+                  │      └─► Returns gas limit, price, gas fee, and total cost in PROS.
+                  │          Agent decides if it has enough balance/budget to proceed.
+                  │
+                  ├─► 3. Check Limits (rateLimiter.checkLimit)
+                  │      │
+                  │      └─► Pre-flight check to verify that sending does not exceed spend cap limits.
+                  │
+                  ├─► 4. Execute Transaction (sendPayment / sendBatchPayment)
+                  │      │
+                  │      ├─► Validate recipient EVM address formats
+                  │      │
+                  │      ├─► Rate Limiter Pre-Flight Check (Hourly & Daily caps checked)
+                  │      │
+                  │      ├─► Submit Transaction to Pharos L1 Network
+                  │      │
+                  │      ├─► Wait up to 60s for transaction receipt
+                  │      │
+                  │      └─► [Success] Log details to session history & return confirmation
+                  │          [Failure] Revert rate limit reservation, log failure to history, and throw PaymentSkillError
+```
+
+---
+
 ## Why PROS Payment Skill?
+
 
 In decentralized agent networks, the ability to transact is as fundamental as the ability to reason. Every agent needs to pay for API usage, purchase data feeds, trigger on-chain workflows, or execute financial trades. The **PROS Payment Skill** is the foundational primitive for Pharos agents because:
 1. **Agent Self-Preservation**: Built-in rate limiting prevents loops from draining wallet balances.
