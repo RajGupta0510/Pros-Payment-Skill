@@ -11,7 +11,7 @@ process.env.MAX_HOURLY_SPEND = '100';
 process.env.MAX_DAILY_SPEND = '500';
 
 const { ethers } = require('ethers');
-const { sendPayment, sendBatchPayment, sendConditionalPayment, estimatePaymentCost, getTransactionHistory, clearTransactionHistory, setWallet } = require('./payment');
+const { sendPayment, sendBatchPayment, sendConditionalPayment, estimatePaymentCost, getTransactionHistory, clearTransactionHistory, checkBalance, setWallet } = require('./payment');
 const rateLimiter = require('./rateLimiter');
 
 describe('PROS Payment Skill Tests', () => {
@@ -33,7 +33,8 @@ describe('PROS Payment Skill Tests', () => {
       getFeeData: jest.fn().mockResolvedValue({
         gasPrice: ethers.parseUnits('2', 'gwei'),
         maxFeePerGas: ethers.parseUnits('2', 'gwei')
-      })
+      }),
+      getBalance: jest.fn().mockResolvedValue(ethers.parseEther('100.0'))
     };
 
     mockWallet = {
@@ -499,6 +500,97 @@ describe('PROS Payment Skill Tests', () => {
       clearTransactionHistory();
       history = await getTransactionHistory();
       expect(history).toHaveLength(0);
+    });
+  });
+
+  describe('Feature 8: Check Wallet Balance', () => {
+    test('should return formatted native balance of any wallet address', async () => {
+      mockProvider.getBalance.mockResolvedValue(ethers.parseEther('25.5'));
+
+      const result = await checkBalance(recipient);
+      expect(result).toBe('25.5');
+      expect(mockProvider.getBalance).toHaveBeenCalledWith(recipient);
+    });
+
+    test('should throw error if wallet address is missing', async () => {
+      await expect(checkBalance())
+        .rejects.toThrow('Validation Error: Wallet address is required.');
+    });
+
+    test('should throw error if wallet address is invalid', async () => {
+      await expect(checkBalance('not-an-address'))
+        .rejects.toThrow('Validation Error: "not-an-address" is not a valid EVM address.');
+    });
+  });
+
+  describe('Structured Error Responses', () => {
+    test('should throw PaymentSkillError with INVALID_ADDRESS for invalid recipient address', async () => {
+      let thrown = null;
+      try {
+        await sendPayment({ to: 'invalid-address', amount: '10.0' });
+      } catch (err) {
+        thrown = err;
+      }
+      expect(thrown).not.toBeNull();
+      expect(thrown.name).toBe('PaymentSkillError');
+      expect(thrown.errorCode).toBe('INVALID_ADDRESS');
+      expect(thrown.errorMessage).toContain('is not a valid EVM address');
+      expect(thrown.retryable).toBe(false);
+    });
+
+    test('should throw PaymentSkillError with RATE_LIMIT_EXCEEDED when spending cap is exceeded', async () => {
+      let thrown = null;
+      try {
+        await sendPayment({ to: recipient, amount: '101.0' });
+      } catch (err) {
+        thrown = err;
+      }
+      expect(thrown).not.toBeNull();
+      expect(thrown.name).toBe('PaymentSkillError');
+      expect(thrown.errorCode).toBe('RATE_LIMIT_EXCEEDED');
+      expect(thrown.errorMessage).toContain('would exceed');
+      expect(thrown.retryable).toBe(false);
+    });
+
+    test('should throw PaymentSkillError with TIMEOUT when transaction wait times out', async () => {
+      let thrown = null;
+      try {
+        await sendPayment({ to: recipient, amount: '99.0' });
+      } catch (err) {
+        thrown = err;
+      }
+      expect(thrown).not.toBeNull();
+      expect(thrown.name).toBe('PaymentSkillError');
+      expect(thrown.errorCode).toBe('TIMEOUT');
+      expect(thrown.errorMessage).toContain('timed out');
+      expect(thrown.retryable).toBe(true);
+    });
+
+    test('should throw PaymentSkillError with EXECUTION_REVERTED when transaction reverts on-chain', async () => {
+      let thrown = null;
+      try {
+        await sendPayment({ to: recipient, amount: '66.0' });
+      } catch (err) {
+        thrown = err;
+      }
+      expect(thrown).not.toBeNull();
+      expect(thrown.name).toBe('PaymentSkillError');
+      expect(thrown.errorCode).toBe('EXECUTION_REVERTED');
+      expect(thrown.errorMessage).toContain('execution reverted');
+      expect(thrown.retryable).toBe(false);
+    });
+
+    test('should throw PaymentSkillError with INVALID_ADDRESS for checkBalance invalid address', async () => {
+      let thrown = null;
+      try {
+        await checkBalance('invalid-address');
+      } catch (err) {
+        thrown = err;
+      }
+      expect(thrown).not.toBeNull();
+      expect(thrown.name).toBe('PaymentSkillError');
+      expect(thrown.errorCode).toBe('INVALID_ADDRESS');
+      expect(thrown.retryable).toBe(false);
     });
   });
 });

@@ -307,6 +307,25 @@
           "required": ["txHash", "timestamp", "recipient", "amount", "status"]
         }
       }
+    },
+    {
+      "name": "checkBalance",
+      "description": "Returns the native balance of any EVM wallet address formatted in PROS tokens.",
+      "input": {
+        "type": "object",
+        "properties": {
+          "address": {
+            "type": "string",
+            "description": "The 20-byte EVM address to check balance for (hex format, 0x-prefixed)",
+            "pattern": "^0x[0-9a-fA-F]{40}$"
+          }
+        },
+        "required": ["address"]
+      },
+      "output": {
+        "type": "string",
+        "description": "The wallet balance in PROS tokens as a decimal string"
+      }
     }
   ]
 }

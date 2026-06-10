@@ -23,6 +23,53 @@ async function getTransactionHistory() {
   return Array.from(transactionHistory.values());
 }
 
+/**
+ * Custom Error class for payment skill errors providing structured metadata.
+ */
+class PaymentSkillError extends Error {
+  constructor(errorCode, errorMessage, retryable = false) {
+    super(errorMessage);
+    this.errorCode = errorCode;
+    this.errorMessage = errorMessage;
+    this.retryable = retryable;
+    this.name = 'PaymentSkillError';
+  }
+}
+
+/**
+ * Maps standard blockchain/library errors to structured PaymentSkillErrors.
+ * @param {Error} err Raw error
+ * @returns {PaymentSkillError} The mapped structured error
+ */
+function mapToPaymentSkillError(err) {
+  if (err instanceof PaymentSkillError) return err;
+
+  const msg = err.message || '';
+  let errorCode = 'NETWORK_ERROR';
+  let retryable = true;
+
+  if (msg.includes('insufficient funds') || err.code === 'INSUFFICIENT_FUNDS') {
+    errorCode = 'INSUFFICIENT_FUNDS';
+    retryable = false;
+  } else if (msg.includes('timeout') || msg.includes('timed out') || err.code === 'TIMEOUT') {
+    errorCode = 'TIMEOUT';
+    retryable = true;
+  } else if (msg.includes('invalid address') || msg.includes('is not a valid EVM address')) {
+    errorCode = 'INVALID_ADDRESS';
+    retryable = false;
+  } else if (msg.includes('Rate limit exceeded')) {
+    errorCode = 'RATE_LIMIT_EXCEEDED';
+    retryable = false;
+  } else if (msg.includes('Validation Error') || msg.includes('must be a positive number') || msg.includes('is required') || msg.includes('exceeds the limit')) {
+    errorCode = 'INVALID_INPUT';
+    retryable = false;
+  } else if (msg.includes('revert') || msg.includes('reverted') || msg.includes('Condition Not Met') || msg.includes('Condition Evaluation Failed') || msg.includes('Payment Execution Error') || msg.includes('Batch submission failed')) {
+    errorCode = 'EXECUTION_REVERTED';
+    retryable = false;
+  }
+
+  return new PaymentSkillError(errorCode, sanitizeErrorMessage(msg), retryable);
+}
 
 /**
  * Truncates a string to prevent log injection or overflow from untrusted inputs.
@@ -58,7 +105,7 @@ let activeWallet = wallet;
  */
 function getActiveWallet() {
   if (!activeWallet) {
-    throw new Error('Payment Skill Error: Wallet is not initialized.');
+    throw new PaymentSkillError('NETWORK_ERROR', 'Payment Skill Error: Wallet is not initialized.', true);
   }
   return activeWallet;
 }
@@ -79,26 +126,26 @@ function setWallet(newWallet) {
  */
 function validatePaymentInput(to, amount, memo) {
   if (!to) {
-    throw new Error('Validation Error: Recipient address ("to") is required.');
+    throw new PaymentSkillError('INVALID_INPUT', 'Validation Error: Recipient address ("to") is required.', false);
   }
   if (!ethers.isAddress(to)) {
-    throw new Error(`Validation Error: "${truncateInput(to)}" is not a valid EVM address.`);
+    throw new PaymentSkillError('INVALID_ADDRESS', `Validation Error: "${truncateInput(to)}" is not a valid EVM address.`, false);
   }
 
   if (amount === undefined || amount === null) {
-    throw new Error('Validation Error: Transfer "amount" is required.');
+    throw new PaymentSkillError('INVALID_INPUT', 'Validation Error: Transfer "amount" is required.', false);
   }
   const numAmount = parseFloat(amount);
   if (isNaN(numAmount) || numAmount <= 0) {
-    throw new Error(`Validation Error: Amount must be a positive number. Got: "${truncateInput(amount)}"`);
+    throw new PaymentSkillError('INVALID_INPUT', `Validation Error: Amount must be a positive number. Got: "${truncateInput(amount)}"`, false);
   }
 
   if (memo !== undefined && memo !== null) {
     if (typeof memo !== 'string') {
-      throw new Error('Validation Error: "memo" must be a string.');
+      throw new PaymentSkillError('INVALID_INPUT', 'Validation Error: "memo" must be a string.', false);
     }
     if (memo.length > 1000) {
-      throw new Error('Validation Error: "memo" length exceeds the limit of 1000 characters.');
+      throw new PaymentSkillError('INVALID_INPUT', 'Validation Error: "memo" length exceeds the limit of 1000 characters.', false);
     }
   }
 }
@@ -112,76 +159,89 @@ function validatePaymentInput(to, amount, memo) {
  * @returns {Promise<{txHash: string, blockNumber: number, status: string, timestamp: string}>} Transaction receipt details
  */
 async function sendPayment({ to, amount, memo }) {
-  // 1. Validate inputs
-  validatePaymentInput(to, amount, memo);
-
-  const currentWallet = getActiveWallet();
-  const senderAddress = await currentWallet.getAddress();
-
-  // 2. Rate limiting check (MUST run BEFORE any transaction)
-  rateLimiter.checkLimit(senderAddress, amount);
-
-  // 3. Record transaction in rate limiter (optimistically)
-  const recordTs = rateLimiter.record(senderAddress, amount);
-
-  let tx;
   try {
-    // 4. Construct transaction payload
-    const val = ethers.parseEther(amount.toString());
-    const data = memo ? ethers.hexlify(ethers.toUtf8Bytes(memo)) : '0x';
+    // 1. Validate inputs
+    validatePaymentInput(to, amount, memo);
 
-    // 5. Submit transaction
-    tx = await currentWallet.sendTransaction({
-      to,
-      value: val,
-      data
-    });
+    const currentWallet = getActiveWallet();
+    const senderAddress = await currentWallet.getAddress();
 
-    recordHistory(tx.hash, {
-      recipient: to,
-      amount,
-      status: 'pending'
-    });
+    // 2. Rate limiting check (MUST run BEFORE any transaction)
+    try {
+      rateLimiter.checkLimit(senderAddress, amount);
+    } catch (limErr) {
+      throw new PaymentSkillError('RATE_LIMIT_EXCEEDED', limErr.message, false);
+    }
 
-    // 6. Poll for confirmation (with 60-second timeout)
-    const receipt = await tx.wait(1, 60000);
+    // 3. Record transaction in rate limiter (optimistically)
+    const recordTs = rateLimiter.record(senderAddress, amount);
 
-    // 7. Fetch block timestamp
-    const block = await currentWallet.provider.getBlock(receipt.blockNumber);
-    const timestamp = block ? new Date(block.timestamp * 1000).toISOString() : new Date().toISOString();
+    let tx;
+    try {
+      // 4. Construct transaction payload
+      const val = ethers.parseEther(amount.toString());
+      const data = memo ? ethers.hexlify(ethers.toUtf8Bytes(memo)) : '0x';
 
-    const status = receipt.status === 1 ? 'success' : 'failed';
-    recordHistory(receipt.hash, {
-      timestamp,
-      recipient: to,
-      amount,
-      status
-    });
+      // 5. Submit transaction
+      tx = await currentWallet.sendTransaction({
+        to,
+        value: val,
+        data
+      });
 
-    return {
-      txHash: receipt.hash,
-      blockNumber: receipt.blockNumber,
-      status,
-      timestamp
-    };
-  } catch (err) {
-    // 8. Rollback rate limiter on failure
-    rateLimiter.rollback(senderAddress, amount, recordTs);
-
-    const failedHash = err.transactionHash || (tx && tx.hash);
-    if (failedHash) {
-      recordHistory(failedHash, {
+      recordHistory(tx.hash, {
         recipient: to,
         amount,
-        status: 'failed'
+        status: 'pending'
       });
-    }
 
-    // 9. Handle errors gracefully with clear messages
-    if (err.code === 'TIMEOUT' || err.message.includes('timeout')) {
-      throw new Error(`Transaction Timeout Error: Payment submission succeeded but confirmation timed out after 60 seconds. TxHash: ${truncateInput(err.transactionHash || 'unknown')}`);
+      // 6. Poll for confirmation (with 60-second timeout)
+      const receipt = await tx.wait(1, 60000);
+
+      // 7. Fetch block timestamp
+      const block = await currentWallet.provider.getBlock(receipt.blockNumber);
+      const timestamp = block ? new Date(block.timestamp * 1000).toISOString() : new Date().toISOString();
+
+      const status = receipt.status === 1 ? 'success' : 'failed';
+      recordHistory(receipt.hash, {
+        timestamp,
+        recipient: to,
+        amount,
+        status
+      });
+
+      return {
+        txHash: receipt.hash,
+        blockNumber: receipt.blockNumber,
+        status,
+        timestamp
+      };
+    } catch (err) {
+      // 8. Rollback rate limiter on failure
+      rateLimiter.rollback(senderAddress, amount, recordTs);
+
+      const failedHash = err.transactionHash || (tx && tx.hash);
+      if (failedHash) {
+        recordHistory(failedHash, {
+          recipient: to,
+          amount,
+          status: 'failed'
+        });
+      }
+
+      // Map to exact custom error prefix expected by tests
+      let mappedErr = err;
+      if (!(err instanceof PaymentSkillError)) {
+        if (err.code === 'TIMEOUT' || err.message.includes('timeout')) {
+          mappedErr = new PaymentSkillError('TIMEOUT', `Transaction Timeout Error: Payment submission succeeded but confirmation timed out after 60 seconds. TxHash: ${truncateInput(err.transactionHash || 'unknown')}`, true);
+        } else {
+          mappedErr = new PaymentSkillError('EXECUTION_REVERTED', `Payment Execution Error: ${sanitizeErrorMessage(err.message)}`, false);
+        }
+      }
+      throw mapToPaymentSkillError(mappedErr);
     }
-    throw new Error(`Payment Execution Error: ${sanitizeErrorMessage(err.message)}`);
+  } catch (err) {
+    throw mapToPaymentSkillError(err);
   }
 }
 
@@ -193,134 +253,149 @@ async function sendPayment({ to, amount, memo }) {
  * @returns {Promise<Array<Object>>} Array of transaction receipt results
  */
 async function sendBatchPayment({ payments }) {
-  // 1. Validate input batch structure
-  if (!payments || !Array.isArray(payments) || payments.length === 0) {
-    throw new Error('Validation Error: "payments" must be a non-empty array.');
-  }
-
-  // 2. Validate individual payments and sum total amount
   let totalAmount = 0;
-  for (let i = 0; i < payments.length; i++) {
-    const payment = payments[i];
-    try {
-      validatePaymentInput(payment.to, payment.amount, payment.memo);
-    } catch (err) {
-      throw new Error(`Validation Error at index ${i}: ${err.message}`);
-    }
-    totalAmount += parseFloat(payment.amount);
-  }
-
-  const currentWallet = getActiveWallet();
-  const senderAddress = await currentWallet.getAddress();
-
-  // 3. Rate limiting check (MUST run BEFORE any transaction)
-  rateLimiter.checkLimit(senderAddress, totalAmount);
-
-  // 4. Record transaction in rate limiter (optimistically)
-  const recordTs = rateLimiter.record(senderAddress, totalAmount);
-
-  const submittedTxes = [];
+  let senderAddress;
+  let recordTs;
   try {
-    // 5. Submit transactions sequentially using manual nonce increment to avoid collisions
-    let currentNonce = await currentWallet.getNonce();
+    // 1. Validate input batch structure
+    if (!payments || !Array.isArray(payments) || payments.length === 0) {
+      throw new PaymentSkillError('INVALID_INPUT', 'Validation Error: "payments" must be a non-empty array.', false);
+    }
 
+    // 2. Validate individual payments and sum total amount
     for (let i = 0; i < payments.length; i++) {
       const payment = payments[i];
-      const val = ethers.parseEther(payment.amount.toString());
-      const data = payment.memo ? ethers.hexlify(ethers.toUtf8Bytes(payment.memo)) : '0x';
-
       try {
-        const tx = await currentWallet.sendTransaction({
-          to: payment.to,
-          value: val,
-          data,
-          nonce: currentNonce++
-        });
-        submittedTxes.push({ tx, payment });
+        validatePaymentInput(payment.to, payment.amount, payment.memo);
+      } catch (err) {
+        throw new PaymentSkillError('INVALID_INPUT', `Validation Error at index ${i}: ${err.message}`, false);
+      }
+      totalAmount += parseFloat(payment.amount);
+    }
 
-        recordHistory(tx.hash, {
-          recipient: payment.to,
-          amount: payment.amount,
-          status: 'pending'
-        });
-      } catch (submitErr) {
-        // Rollback unsubmitted amount from rate limiter
-        const failedAmount = payments.slice(i).reduce((sum, p) => sum + parseFloat(p.amount), 0);
-        rateLimiter.rollback(senderAddress, totalAmount, recordTs);
-        const successAmount = totalAmount - failedAmount;
-        if (successAmount > 0) {
-          rateLimiter.record(senderAddress, successAmount, recordTs);
+    const currentWallet = getActiveWallet();
+    senderAddress = await currentWallet.getAddress();
+
+    // 3. Rate limiting check (MUST run BEFORE any transaction)
+    try {
+      rateLimiter.checkLimit(senderAddress, totalAmount);
+    } catch (limErr) {
+      throw new PaymentSkillError('RATE_LIMIT_EXCEEDED', limErr.message, false);
+    }
+
+    // 4. Record transaction in rate limiter (optimistically)
+    recordTs = rateLimiter.record(senderAddress, totalAmount);
+
+    const submittedTxes = [];
+    try {
+      // 5. Submit transactions sequentially using manual nonce increment to avoid collisions
+      let currentNonce = await currentWallet.getNonce();
+
+      for (let i = 0; i < payments.length; i++) {
+        const payment = payments[i];
+        const val = ethers.parseEther(payment.amount.toString());
+        const data = payment.memo ? ethers.hexlify(ethers.toUtf8Bytes(payment.memo)) : '0x';
+
+        try {
+          const tx = await currentWallet.sendTransaction({
+            to: payment.to,
+            value: val,
+            data,
+            nonce: currentNonce++
+          });
+          submittedTxes.push({ tx, payment });
+
+          recordHistory(tx.hash, {
+            recipient: payment.to,
+            amount: payment.amount,
+            status: 'pending'
+          });
+        } catch (submitErr) {
+          // Rollback unsubmitted amount from rate limiter
+          const failedAmount = payments.slice(i).reduce((sum, p) => sum + parseFloat(p.amount), 0);
+          rateLimiter.rollback(senderAddress, totalAmount, recordTs);
+          const successAmount = totalAmount - failedAmount;
+          if (successAmount > 0) {
+            rateLimiter.record(senderAddress, successAmount, recordTs);
+          }
+          throw new PaymentSkillError('EXECUTION_REVERTED', `Batch submission failed at index ${i}: ${sanitizeErrorMessage(submitErr.message)}`, false);
         }
-        throw new Error(`Batch submission failed at index ${i}: ${sanitizeErrorMessage(submitErr.message)}`);
       }
+
+      // 6. Poll for confirmation in parallel
+      const receiptPromises = submittedTxes.map(async ({ tx, payment }) => {
+        try {
+          const receipt = await tx.wait(1, 60000);
+          const block = await currentWallet.provider.getBlock(receipt.blockNumber);
+          const timestamp = block ? new Date(block.timestamp * 1000).toISOString() : new Date().toISOString();
+          const status = receipt.status === 1 ? 'success' : 'failed';
+
+          recordHistory(receipt.hash, {
+            timestamp,
+            recipient: payment.to,
+            amount: payment.amount,
+            status
+          });
+
+          return {
+            to: payment.to,
+            amount: payment.amount,
+            memo: payment.memo || null,
+            txHash: receipt.hash,
+            blockNumber: receipt.blockNumber,
+            gasUsed: receipt.gasUsed.toString(),
+            status,
+            timestamp
+          };
+        } catch (waitErr) {
+          recordHistory(tx.hash, {
+            recipient: payment.to,
+            amount: payment.amount,
+            status: 'failed'
+          });
+
+          return {
+            to: payment.to,
+            amount: payment.amount,
+            memo: payment.memo || null,
+            txHash: tx.hash,
+            status: 'failed',
+            error: waitErr.message
+          };
+        }
+      });
+
+      const receipts = await Promise.all(receiptPromises);
+
+      // 7. Reconcile rate limiter for any failed transactions in the batch
+      let totalFailedAmount = 0;
+      for (const r of receipts) {
+        if (r.status === 'failed') {
+          totalFailedAmount += parseFloat(r.amount);
+        }
+      }
+
+      if (totalFailedAmount > 0) {
+        rateLimiter.rollback(senderAddress, totalAmount, recordTs);
+        const finalSuccessAmount = totalAmount - totalFailedAmount;
+        if (finalSuccessAmount > 0) {
+          rateLimiter.record(senderAddress, finalSuccessAmount, recordTs);
+        }
+      }
+
+      return receipts;
+    } catch (err) {
+      throw mapToPaymentSkillError(err);
     }
-
-    // 6. Poll for confirmation in parallel
-    const receiptPromises = submittedTxes.map(async ({ tx, payment }) => {
-      try {
-        const receipt = await tx.wait(1, 60000);
-        const block = await currentWallet.provider.getBlock(receipt.blockNumber);
-        const timestamp = block ? new Date(block.timestamp * 1000).toISOString() : new Date().toISOString();
-        const status = receipt.status === 1 ? 'success' : 'failed';
-
-        recordHistory(receipt.hash, {
-          timestamp,
-          recipient: payment.to,
-          amount: payment.amount,
-          status
-        });
-
-        return {
-          to: payment.to,
-          amount: payment.amount,
-          memo: payment.memo || null,
-          txHash: receipt.hash,
-          blockNumber: receipt.blockNumber,
-          gasUsed: receipt.gasUsed.toString(),
-          status,
-          timestamp
-        };
-      } catch (waitErr) {
-        recordHistory(tx.hash, {
-          recipient: payment.to,
-          amount: payment.amount,
-          status: 'failed'
-        });
-
-        return {
-          to: payment.to,
-          amount: payment.amount,
-          memo: payment.memo || null,
-          txHash: tx.hash,
-          status: 'failed',
-          error: waitErr.message
-        };
-      }
-    });
-
-    const receipts = await Promise.all(receiptPromises);
-
-    // 7. Reconcile rate limiter for any failed transactions in the batch
-    let totalFailedAmount = 0;
-    for (const r of receipts) {
-      if (r.status === 'failed') {
-        totalFailedAmount += parseFloat(r.amount);
-      }
-    }
-
-    if (totalFailedAmount > 0) {
-      rateLimiter.rollback(senderAddress, totalAmount, recordTs);
-      const finalSuccessAmount = totalAmount - totalFailedAmount;
-      if (finalSuccessAmount > 0) {
-        rateLimiter.record(senderAddress, finalSuccessAmount, recordTs);
-      }
-    }
-
-    return receipts;
   } catch (err) {
-    // Rollback total amount if unexpected error occurs
-    rateLimiter.rollback(senderAddress, totalAmount, recordTs);
-    throw new Error(`Batch Payment Execution Error: ${sanitizeErrorMessage(err.message)}`);
+    if (senderAddress && recordTs) {
+      rateLimiter.rollback(senderAddress, totalAmount, recordTs);
+    }
+    let mappedErr = err;
+    if (!(err instanceof PaymentSkillError)) {
+      mappedErr = new PaymentSkillError('NETWORK_ERROR', `Batch Payment Execution Error: ${sanitizeErrorMessage(err.message)}`, true);
+    }
+    throw mapToPaymentSkillError(mappedErr);
   }
 }
 
@@ -342,10 +417,10 @@ async function evalCondition(provider, condition) {
     if (type === 'balance') {
       const { targetAddress, minBalance } = condition;
       if (!targetAddress || !ethers.isAddress(targetAddress)) {
-        throw new Error('Invalid balance check condition: "targetAddress" is missing or invalid.');
+        throw new PaymentSkillError('INVALID_ADDRESS', 'Invalid balance check condition: "targetAddress" is missing or invalid.', false);
       }
       if (minBalance === undefined || isNaN(parseFloat(minBalance))) {
-        throw new Error('Invalid balance check condition: "minBalance" must be a valid number representation.');
+        throw new PaymentSkillError('INVALID_INPUT', 'Invalid balance check condition: "minBalance" must be a valid number representation.', false);
       }
       const balance = await provider.getBalance(targetAddress);
       const minBalanceWei = ethers.parseEther(minBalance.toString());
@@ -355,13 +430,13 @@ async function evalCondition(provider, condition) {
     if (type === 'contractCall') {
       const { address, abi, method, args = [], expected } = condition;
       if (!address || !ethers.isAddress(address)) {
-        throw new Error('Invalid contractCall condition: "address" is missing or invalid.');
+        throw new PaymentSkillError('INVALID_ADDRESS', 'Invalid contractCall condition: "address" is missing or invalid.', false);
       }
       if (!abi || !Array.isArray(abi)) {
-        throw new Error('Invalid contractCall condition: "abi" must be a valid array.');
+        throw new PaymentSkillError('INVALID_INPUT', 'Invalid contractCall condition: "abi" must be a valid array.', false);
       }
       if (!method || typeof method !== 'string') {
-        throw new Error('Invalid contractCall condition: "method" must be a valid method name string.');
+        throw new PaymentSkillError('INVALID_INPUT', 'Invalid contractCall condition: "method" must be a valid method name string.', false);
       }
       
       const contract = new ethers.Contract(address, abi, provider);
@@ -374,10 +449,10 @@ async function evalCondition(provider, condition) {
       return res === expected;
     }
     
-    throw new Error(`Unsupported condition type: "${type}"`);
+    throw new PaymentSkillError('INVALID_INPUT', `Unsupported condition type: "${type}"`, false);
   }
 
-  throw new Error('Condition must be a function or an object.');
+  throw new PaymentSkillError('INVALID_INPUT', 'Condition must be a function or an object.', false);
 }
 
 /**
@@ -390,26 +465,30 @@ async function evalCondition(provider, condition) {
  * @returns {Promise<Object>} Transaction receipt details
  */
 async function sendConditionalPayment({ to, amount, memo, condition }) {
-  if (!condition) {
-    throw new Error('Validation Error: "condition" is required.');
-  }
-
-  const currentWallet = getActiveWallet();
-
-  // 1. Evaluate on-chain condition
-  let conditionMet = false;
   try {
-    conditionMet = await evalCondition(currentWallet.provider, condition);
-  } catch (condErr) {
-    throw new Error(`Condition Evaluation Failed: ${sanitizeErrorMessage(condErr.message)}`);
-  }
+    if (!condition) {
+      throw new PaymentSkillError('INVALID_INPUT', 'Validation Error: "condition" is required.', false);
+    }
 
-  if (!conditionMet) {
-    throw new Error('Condition Not Met: Payment aborted.');
-  }
+    const currentWallet = getActiveWallet();
 
-  // 2. Delegate to sendPayment (handles limits, validation, execution, and verification)
-  return sendPayment({ to, amount, memo });
+    // 1. Evaluate on-chain condition
+    let conditionMet = false;
+    try {
+      conditionMet = await evalCondition(currentWallet.provider, condition);
+    } catch (condErr) {
+      throw new PaymentSkillError('EXECUTION_REVERTED', `Condition Evaluation Failed: ${sanitizeErrorMessage(condErr.message)}`, false);
+    }
+
+    if (!conditionMet) {
+      throw new PaymentSkillError('EXECUTION_REVERTED', 'Condition Not Met: Payment aborted.', false);
+    }
+
+    // 2. Delegate to sendPayment (handles limits, validation, execution, and verification)
+    return sendPayment({ to, amount, memo });
+  } catch (err) {
+    throw mapToPaymentSkillError(err);
+  }
 }
 
 /**
@@ -421,54 +500,80 @@ async function sendConditionalPayment({ to, amount, memo, condition }) {
  * @returns {Promise<{gasLimit: string, gasPrice: string, gasCost: string, totalCost: string}>} Cost breakdown
  */
 async function estimatePaymentCost({ to, amount, memo }) {
-  // 1. Validate inputs
-  validatePaymentInput(to, amount, memo);
-
-  const currentWallet = getActiveWallet();
-  const val = ethers.parseEther(amount.toString());
-  const data = memo ? ethers.hexlify(ethers.toUtf8Bytes(memo)) : '0x';
-
-  // 2. Fetch gas price
-  let gasPrice = ethers.parseUnits('1', 'gwei');
   try {
-    const feeData = await currentWallet.provider.getFeeData();
-    gasPrice = feeData.gasPrice ?? feeData.maxFeePerGas ?? gasPrice;
-  } catch (feeErr) {
-    // Ignore error and use fallback
-  }
+    // 1. Validate inputs
+    validatePaymentInput(to, amount, memo);
 
-  // 3. Estimate gas limit
-  let gasLimit;
-  try {
-    gasLimit = await currentWallet.estimateGas({
-      to,
-      value: val,
-      data
-    });
-  } catch (err) {
+    const currentWallet = getActiveWallet();
+    const val = ethers.parseEther(amount.toString());
+    const data = memo ? ethers.hexlify(ethers.toUtf8Bytes(memo)) : '0x';
+
+    // 2. Fetch gas price
+    let gasPrice = ethers.parseUnits('1', 'gwei');
+    try {
+      const feeData = await currentWallet.provider.getFeeData();
+      gasPrice = feeData.gasPrice ?? feeData.maxFeePerGas ?? gasPrice;
+    } catch (feeErr) {
+      // Ignore error and use fallback
+    }
+
+    // 3. Estimate gas limit
+    let gasLimit;
     try {
       gasLimit = await currentWallet.estimateGas({
         to,
-        value: 0n,
+        value: val,
         data
       });
-    } catch (err2) {
-      const dataLen = memo ? ethers.toUtf8Bytes(memo).length : 0;
-      gasLimit = 21000n + BigInt(dataLen * 16);
+    } catch (err) {
+      try {
+        gasLimit = await currentWallet.estimateGas({
+          to,
+          value: 0n,
+          data
+        });
+      } catch (err2) {
+        const dataLen = memo ? ethers.toUtf8Bytes(memo).length : 0;
+        gasLimit = 21000n + BigInt(dataLen * 16);
+      }
     }
+
+    // 4. Calculate costs
+    const gasCostWei = gasLimit * gasPrice;
+    const gasCost = ethers.formatEther(gasCostWei);
+    const totalCost = ethers.formatEther(val + gasCostWei);
+
+    return {
+      gasLimit: gasLimit.toString(),
+      gasPrice: gasPrice.toString(),
+      gasCost,
+      totalCost
+    };
+  } catch (err) {
+    throw mapToPaymentSkillError(err);
   }
+}
 
-  // 4. Calculate costs
-  const gasCostWei = gasLimit * gasPrice;
-  const gasCost = ethers.formatEther(gasCostWei);
-  const totalCost = ethers.formatEther(val + gasCostWei);
+/**
+ * Returns the native PROS balance of any EVM address.
+ * @param {string} address The EVM address to query
+ * @returns {Promise<string>} Balance formatted in PROS (decimal string)
+ */
+async function checkBalance(address) {
+  try {
+    if (!address) {
+      throw new PaymentSkillError('INVALID_INPUT', 'Validation Error: Wallet address is required.', false);
+    }
+    if (!ethers.isAddress(address)) {
+      throw new PaymentSkillError('INVALID_ADDRESS', `Validation Error: "${truncateInput(address)}" is not a valid EVM address.`, false);
+    }
 
-  return {
-    gasLimit: gasLimit.toString(),
-    gasPrice: gasPrice.toString(),
-    gasCost,
-    totalCost
-  };
+    const currentWallet = getActiveWallet();
+    const balanceWei = await currentWallet.provider.getBalance(address);
+    return ethers.formatEther(balanceWei);
+  } catch (err) {
+    throw mapToPaymentSkillError(err);
+  }
 }
 
 module.exports = {
@@ -478,7 +583,8 @@ module.exports = {
   estimatePaymentCost,
   getTransactionHistory,
   clearTransactionHistory,
+  checkBalance,
+  PaymentSkillError,
   setWallet,
   getActiveWallet
 };
-
