@@ -1,4 +1,4 @@
-const { sendPayment, sendBatchPayment, sendConditionalPayment, estimatePaymentCost, getTransactionHistory, clearTransactionHistory, checkBalance } = require('./payment');
+const { sendPayment, sendBatchPayment, sendConditionalPayment, estimatePaymentCost, getTransactionHistory, clearTransactionHistory, checkBalance, getPharosNetworkStatus } = require('./payment');
 const rateLimiter = require('./rateLimiter');
 
 module.exports = {
@@ -9,5 +9,6 @@ module.exports = {
   getTransactionHistory,
   clearTransactionHistory,
   checkBalance,
+  getPharosNetworkStatus,
   rateLimiter
 };

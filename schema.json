@@ -326,6 +326,40 @@
         "type": "string",
         "description": "The wallet balance in PROS tokens as a decimal string"
       }
+    },
+    {
+      "name": "getPharosNetworkStatus",
+      "description": "Checks and returns the connection status, current block, chain details, and gas price of the Pharos L1 Network.",
+      "input": {
+        "type": "object",
+        "properties": {}
+      },
+      "output": {
+        "type": "object",
+        "properties": {
+          "blockNumber": {
+            "type": "integer",
+            "description": "The current block number of the Pharos L1 Network"
+          },
+          "chainId": {
+            "type": "string",
+            "description": "The chain ID of the Pharos L1 Network"
+          },
+          "networkName": {
+            "type": "string",
+            "description": "Name of the network"
+          },
+          "gasPricePros": {
+            "type": "string",
+            "description": "Current estimated gas price formatted in PROS tokens"
+          },
+          "healthy": {
+            "type": "boolean",
+            "description": "True if the network is online and responsive, false otherwise"
+          }
+        },
+        "required": ["blockNumber", "chainId", "networkName", "gasPricePros", "healthy"]
+      }
     }
   ]
 }

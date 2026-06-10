@@ -576,6 +576,42 @@ async function checkBalance(address) {
   }
 }
 
+/**
+ * Retrieves the connection and operational status of the Pharos Network.
+ * @returns {Promise<{blockNumber: number, chainId: string, networkName: string, gasPricePros: string, healthy: boolean}>} Network status
+ */
+async function getPharosNetworkStatus() {
+  try {
+    const currentWallet = getActiveWallet();
+    const provider = currentWallet.provider;
+
+    const [blockNumber, network, feeData] = await Promise.all([
+      provider.getBlockNumber(),
+      provider.getNetwork(),
+      provider.getFeeData()
+    ]);
+
+    const gasPrice = feeData.gasPrice ?? feeData.maxFeePerGas ?? ethers.parseUnits('1', 'gwei');
+    const gasPricePros = ethers.formatEther(gasPrice);
+
+    return {
+      blockNumber: Number(blockNumber),
+      chainId: network.chainId.toString(),
+      networkName: network.name || 'Pharos Network',
+      gasPricePros,
+      healthy: true
+    };
+  } catch (err) {
+    return {
+      blockNumber: 0,
+      chainId: '0',
+      networkName: 'Unknown',
+      gasPricePros: '0',
+      healthy: false
+    };
+  }
+}
+
 module.exports = {
   sendPayment,
   sendBatchPayment,
@@ -584,6 +620,7 @@ module.exports = {
   getTransactionHistory,
   clearTransactionHistory,
   checkBalance,
+  getPharosNetworkStatus,
   PaymentSkillError,
   setWallet,
   getActiveWallet

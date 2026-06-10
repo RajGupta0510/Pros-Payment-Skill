@@ -1,239 +1,222 @@
 # PROS Payment Skill
 
-The **PROS Payment Skill** is a highly secure, production-grade integration designed for the EVM-compatible **Pharos Network** L1 blockchain. It handles native PROS token transfers, batch payments, rate limiting protection, cost estimation, transaction history logs, and transaction status verification.
+The **PROS Payment Skill** is a production-grade, highly secure transaction engine designed for autonomous AI agents operating on the EVM-compatible **Pharos Network** L1 blockchain. It handles native PROS token transfers, batch payments, rate limiting protection, cost estimation, transaction history logs, and transaction status verification.
 
-This skill is designed for autonomous AI agents or backend integrations requiring transaction validation and high-reliability payments.
+### Solving the Transaction Problem for AI Agents
+Autonomous AI agents require a deterministic and resilient mechanism to interact with the blockchain. Standard web3 tools lack the guardrails needed for automated systems, placing wallets at risk of budget drains, transaction lockups from nonce collisions, or execution failures due to sudden network congestion. The **PROS Payment Skill** solves these challenges by providing agents with built-in spending limits, pre-flight gas cost estimations, conditional execution gates based on contract states, and self-reconciling rollback loops. This ensures that agents can transact independently and safely within precise operational parameters without manual developer oversight.
 
 ---
 
-## AI Agent Call Flow
+## Why PROS Payment Skill?
 
-Here is a step-by-step text-based flow diagram showing how an AI Agent or Orchestrator interacts with this Skill:
+In decentralized agent networks, the ability to transact is as fundamental as the ability to reason. Every agent needs to pay for API usage, purchase data feeds, trigger on-chain workflows, or execute financial trades. The **PROS Payment Skill** is the foundational primitive for Pharos agents because:
+1. **Agent Self-Preservation**: Built-in rate limiting prevents loops from draining wallet balances.
+2. **Predictive Budgeting**: Pre-flight cost estimation allows agents to decide whether to trigger transactions based on current gas prices before spending gas.
+3. **Conditional Logic**: Agents can execute "conditional" transfers based on contract read outputs (e.g. check oracle prices or token balances) without writing custom smart contracts.
+4. **Resilience**: Features like parallel batching with manual nonce tracking and automatic rate-limit rollbacks ensure agents do not lock up or halt under network congestion.
 
-```text
-       [AI Agent / Orchestrator]
-                  │
-                  ├─► 1. Query Agent Schema (schema.json)
-                  │      │
-                  │      └─► Discovers available tools (sendPayment, checkBalance, estimatePaymentCost, etc.)
-                  │
-                  ├─► 2. Estimate Costs (estimatePaymentCost)
-                  │      │
-                  │      └─► Returns gas limit, price, gas fee, and total cost in PROS.
-                  │          Agent decides if it has enough balance/budget to proceed.
-                  │
-                  ├─► 3. Execute Transaction (sendPayment / sendBatchPayment)
-                  │      │
-                  │      ├─► Validate recipient EVM address formats
-                  │      │
-                  │      ├─► Rate Limiter Pre-Flight Check (Hourly & Daily caps checked)
-                  │      │
-                  │      ├─► Submit Transaction to Pharos L1 Network
-                  │      │
-                  │      ├─► Wait up to 60s for transaction receipt
-                  │      │
-                  │      └─► [Success] Log details to session history & return confirmation
-                  │          [Failure] Revert rate limit reservation, log failure to history, and throw PaymentSkillError
+---
+
+## Feature Matrix
+
+The payment skill provides a robust suite of 10 core features:
+
+| # | Feature Name | Description | Key Benefit |
+| :--- | :--- | :--- | :--- |
+| 1 | **Single Payment Engine** | Sends native PROS to an address with input sanitization and gas-bound checks. | Fast, secure transfers. |
+| 2 | **Sequential Batch Payments** | Submits multiple payments in one call, tracking nonces manually to prevent collision. | Parallel submission without stuck nonces. |
+| 3 | **In-Memory Rate Limiting** | Rolls hourly (100 PROS) and daily (500 PROS) spending caps per address. | Protects agent wallet from drainage loops. |
+| 4 | **Polling & Verification** | Monitors transaction confirmation up to 60 seconds with timestamp extraction. | Assures state finality for agent workflows. |
+| 5 | **Conditional Payments** | Execution gated by custom JS callbacks, balance limits, or contract read states. | Enables autonomous logic gates before sending. |
+| 6 | **Gas & Cost Estimation** | Preview gas limits and gas costs in PROS (includes fallback for unfunded wallets). | Pre-flight budget verification. |
+| 7 | **Session Transaction History** | In-memory `Map` tracking of all session transactions and execution statuses. | Allows agents to audit their own transactions. |
+| 8 | **Check Wallet Balance** | Queries the provider for the native balance of any EVM address. | Verifies wallet capital before dispatching task. |
+| 9 | **Pharos Network Status** | Returns responsive checks, current block height, chain ID, and network name. | Pre-flight network readiness evaluation. |
+| 10 | **Custom Structured Errors** | Emits `PaymentSkillError` with explicit `errorCode` and `retryable` flags. | Structured error recovery for agent pipelines. |
+
+---
+
+## Installation & Setup
+
+### Requirements
+* Node.js (v18+)
+* NPM (v9+)
+
+### 1. Install Dependencies
+Clone the repository and install the dependencies locally:
+```bash
+npm install
+```
+
+### 2. Configure Environment variables (`.env`)
+Copy the environment template and define your credentials:
+```bash
+cp .env.example .env
+```
+
+Open the `.env` file and set the variables:
+```env
+# EVM-compatible Pharos Network RPC endpoint
+PHAROS_RPC_URL=https://rpc.pharos.network
+
+# Private key of the sending wallet
+# WARNING: Keep this secure. Never commit this to version control.
+PRIVATE_KEY=0xYOUR_32_BYTE_PRIVATE_KEY_HEX
+
+# (Optional) Chain ID of the Pharos Network
+CHAIN_ID=
 ```
 
 ---
 
-## Installation
-
-Ensure you have Node.js (v18+) installed.
-
-1. Clone the repository to your local workspace.
-2. Install the package dependencies:
-   ```bash
-   npm install
-   ```
-
----
-
-## Environment Setup (.env)
-
-The skill reads configurations from a local `.env` file at runtime. 
-
-1. Copy the example environment file:
-   ```bash
-   cp .env.example .env
-   ```
-2. Open the `.env` file and configure the parameters:
-   ```env
-   # EVM-compatible Pharos Network RPC endpoint
-   PHAROS_RPC_URL=https://rpc.pharos.network
-
-   # Private key of the sending wallet (ensure it has enough PROS for gas & payments)
-   # WARNING: NEVER commit a real private key to version control!
-   PRIVATE_KEY=0xYOUR_32_BYTE_PRIVATE_KEY_HEX
-
-   # (Optional) Chain ID of the Pharos Network
-   CHAIN_ID=
-   ```
-
----
-
-## Usage Examples
-
-Below are usage examples for the core functions exported by the skill:
+## Code Examples (Agent Integrations)
 
 ### 1. Single Payment (`sendPayment`)
-Sends native PROS tokens to a single recipient EVM address, waits for block confirmation, and returns the transaction receipt.
-
 ```javascript
 const { sendPayment } = require('./index');
 
-async function runSinglePayment() {
+async function executePayment() {
   try {
     const receipt = await sendPayment({
-      to: '0x742d35Cc6634C0532925a3b844Bc454e4438f44e',
-      amount: '10.5',             // Transfer amount in PROS
-      memo: 'For API Usage Fees'   // Optional memo (up to 1000 chars)
+      to: '0xF4976883a299115f19057718a674C38B1a8004A1',
+      amount: '5.0',
+      memo: 'Agent service fee payment'
     });
-
-    console.log('Payment executed successfully:', receipt);
+    console.log('Payment executed:', receipt);
     // Returns: { txHash, blockNumber, status: 'success', timestamp }
   } catch (error) {
-    console.error('Payment failed:', error.message);
+    console.error(`Error (${error.errorCode}):`, error.errorMessage);
   }
 }
-
-runSinglePayment();
+executePayment();
 ```
 
----
-
-### 2. Batch Payment (`sendBatchPayment`)
-Sends PROS to multiple addresses in one call. Transactions are submitted sequentially using manual nonce tracking to avoid collisions, and are confirmed in parallel.
-
+### 2. Batch Payments (`sendBatchPayment`)
 ```javascript
 const { sendBatchPayment } = require('./index');
 
-async function runBatchPayment() {
+async function executeBatch() {
   try {
     const receipts = await sendBatchPayment({
       payments: [
-        { to: '0x742d35Cc6634C0532925a3b844Bc454e4438f44e', amount: '5.0', memo: 'Batch P1' },
-        { to: '0x2222222222222222222222222222222222222222', amount: '12.0', memo: 'Batch P2' }
+        { to: '0xF4976883a299115f19057718a674C38B1a8004A1', amount: '1.5', memo: 'Batch P1' },
+        { to: '0x2222222222222222222222222222222222222222', amount: '2.5', memo: 'Batch P2' }
       ]
     });
-
-    console.log('Batch payments processed:', receipts);
+    console.log('Batch results:', receipts);
   } catch (error) {
-    console.error('Batch payment failed:', error.message);
+    console.error(`Batch Failed (${error.errorCode}):`, error.errorMessage);
   }
 }
-
-runBatchPayment();
+executeBatch();
 ```
 
----
-
-### 3. Conditional Payment (`sendConditionalPayment`)
-Sends native PROS tokens only if a specific on-chain condition is met. This supports:
-- **Programmatic JS Callbacks**: Pass an `async (provider) => boolean` function.
-- **Declarative Balance Checks**: Pass an object `{ type: 'balance', targetAddress, minBalance }`.
-- **Declarative Contract State Checks**: Pass `{ type: 'contractCall', address, abi, method, args, expected }`.
-
+### 3. Conditional Payments (`sendConditionalPayment`)
 ```javascript
 const { sendConditionalPayment } = require('./index');
 
-async function payWithCallbackCondition() {
+async function executeConditional() {
   try {
     const receipt = await sendConditionalPayment({
-      to: '0x742d35Cc6634C0532925a3b844Bc454e4438f44e',
-      amount: '5.0',
-      memo: 'Paid on custom condition',
-      condition: async (provider) => {
-        const blockNumber = await provider.getBlockNumber();
-        return blockNumber % 2 === 0;
+      to: '0xF4976883a299115f19057718a674C38B1a8004A1',
+      amount: '1.0',
+      condition: {
+        type: 'balance',
+        targetAddress: '0xF4976883a299115f19057718a674C38B1a8004A1',
+        minBalance: '10.0' // Only pay if the target address has at least 10 PROS
       }
     });
-
-    console.log('Payment executed:', receipt);
+    console.log('Conditional Payment Sent:', receipt);
   } catch (error) {
-    console.error('Payment skipped or failed:', error.message);
+    console.error('Condition failed or payment failed:', error.errorMessage);
   }
 }
-
-payWithCallbackCondition();
+executeConditional();
 ```
 
----
-
-### 4. Check Wallet Rate Limits (`rateLimiter.checkLimit`)
-Checks if a wallet address can send a specific amount of PROS without exceeding the hourly limit (100 PROS) or daily limit (500 PROS). Throws a detailed `PaymentSkillError` if a limit is exceeded.
-
+### 4. Check Rate Limits (`rateLimiter.checkLimit`)
 ```javascript
 const { rateLimiter } = require('./index');
 
-function checkLimitsBeforeTransaction(walletAddress, amount) {
-  try {
-    rateLimiter.checkLimit(walletAddress, amount);
-    console.log(`Address ${walletAddress} is allowed to send ${amount} PROS.`);
-  } catch (error) {
-    console.error('Rate Limit Check Failed:', error.message);
-  }
+try {
+  rateLimiter.checkLimit('0xF4976883a299115f19057718a674C38B1a8004A1', '50.0');
+  console.log('Allowed to send.');
+} catch (error) {
+  console.error(`Check failed: ${error.message}`);
 }
-
-checkLimitsBeforeTransaction('0x742d35Cc6634C0532925a3b844Bc454e4438f44e', 15.0);
 ```
 
----
+### 5. Manual Limit Reservation (`rateLimiter.record` & `rateLimiter.rollback`)
+```javascript
+const { rateLimiter } = require('./index');
 
-### 5. Estimate Transaction Cost (`estimatePaymentCost`)
-Estimates the gas units, gas price, gas fee, and total transaction cost in PROS *before* broadcasting. This function includes fallback code so that it succeeds even on unfunded wallets.
+const address = '0xF4976883a299115f19057718a674C38B1a8004A1';
+const amount = '15.0';
 
+try {
+  rateLimiter.checkLimit(address, amount);
+  const recordTs = rateLimiter.record(address, amount);
+  
+  // Perform custom transaction...
+  const success = false;
+  
+  if (!success) {
+    rateLimiter.rollback(address, amount, recordTs);
+    console.log('Reservation rolled back.');
+  }
+} catch (error) {
+  console.error(error.message);
+}
+```
+
+### 6. Pre-flight Cost Estimation (`estimatePaymentCost`)
 ```javascript
 const { estimatePaymentCost } = require('./index');
 
-async function checkEstimatedCosts() {
-  try {
-    const cost = await estimatePaymentCost({
-      to: '0x742d35Cc6634C0532925a3b844Bc454e4438f44e',
-      amount: '1.0',
-      memo: 'Estimate Memo'
-    });
-    console.log('Estimated Costs:', cost);
-    // Returns: { gasLimit, gasPrice, gasCost, totalCost }
-  } catch (error) {
-    console.error('Estimation failed:', error.message);
-  }
+async function getEstimation() {
+  const cost = await estimatePaymentCost({
+    to: '0xF4976883a299115f19057718a674C38B1a8004A1',
+    amount: '10.0',
+    memo: 'Gas check'
+  });
+  console.log('Cost Estimation:', cost);
+  // Returns: { gasLimit, gasPrice, gasCost, totalCost }
 }
-
-checkEstimatedCosts();
+getEstimation();
 ```
 
----
-
-### 6. Get Session Transaction History (`getTransactionHistory`)
-Returns the transaction log of all native token transfers sent during the active node session.
-
+### 7. Session Transaction Logs (`getTransactionHistory`)
 ```javascript
 const { getTransactionHistory } = require('./index');
 
 async function showLogs() {
-  const logs = await getTransactionHistory();
-  console.log('Session Transactions:', logs);
+  const history = await getTransactionHistory();
+  console.log('Transactions Sent This Session:', history);
 }
-
 showLogs();
 ```
 
----
-
-### 7. Check Balance (`checkBalance`)
-Queries the blockchain to retrieve the native PROS balance of any EVM address.
-
+### 8. Balance Queries (`checkBalance`)
 ```javascript
 const { checkBalance } = require('./index');
 
 async function showBalance() {
-  const balance = await checkBalance('0x742d35Cc6634C0532925a3b844Bc454e4438f44e');
-  console.log(`Address Balance: ${balance} PROS`);
+  const balance = await checkBalance('0xF4976883a299115f19057718a674C38B1a8004A1');
+  console.log(`Balance: ${balance} PROS`);
 }
-
 showBalance();
+```
+
+### 9. Check Pharos Network Status (`getPharosNetworkStatus`)
+```javascript
+const { getPharosNetworkStatus } = require('./index');
+
+async function showNetwork() {
+  const status = await getPharosNetworkStatus();
+  console.log('Pharos Status:', status);
+  // Returns: { blockNumber, chainId, networkName, gasPricePros, healthy }
+}
+showNetwork();
 ```
 
 ---
@@ -258,20 +241,20 @@ All API functions intercept failures and throw standard `PaymentSkillError` obje
 
 This codebase is designed and audited against standard **CertiK Skill Scanner** compliance guidelines:
 
-1.  **Zero Hardcoded Secrets**:
+*   **Zero Hardcoded Secrets**: 
     *   No private keys, seed phrases, or RPC tokens are hardcoded.
     *   Configuration settings are loaded dynamically at runtime from environment variables using a safe loader (`config.js`).
     *   The unit test suite (`test.js`) dynamically generates disposable mock keys (`ethers.Wallet.createRandom().privateKey`) during setup, preventing static analysis tools from throwing false-positive leaked key alerts.
-2.  **Unauthorized Network Access Control**:
+*   **Unauthorized Network Access Control**:
     *   Enforces secure endpoint bindings and strict domain structures. Arbitrary RPC url injections or malicious redirect options are prohibited.
-3.  **No Shell/Command Executions**:
+*   **No Shell/Command Executions**:
     *   All blockchain operations are completed using standard JS classes and the Ethers library.
     *   System command executions (`exec`, `eval`, `spawn`, `execSync`) are not used, eliminating command injection risks.
-4.  **No Data/Credential Leakage**:
+*   **No Data/Credential Leakage**:
     *   Detailed RPC endpoints or server tokens are redacted. The helper function `sanitizeErrorMessage()` parses all error stack traces and redacts URL endpoints containing potential credentials into a safe placeholder: `[REDACTED_RPC_URL]`.
-5.  **Fail-Fast Parameter Sanitation**:
+*   **Fail-Fast Parameter Sanitation**:
     *   Inputs (EVM addresses, positive limits, and string boundaries) are validated before signatures are generated or transactions are sent, preventing unnecessary gas loss.
-6.  **Optimistic State Allocation & Rollbacks**:
+*   **Optimistic State Allocation & Rollbacks**:
     *   Spending limits are reserved prior to sending. If a transaction fails to submit, times out, or reverts on-chain, the rate-limiter automatically reverts the reserved allocation, preventing wallet lockouts due to network congestion.
 
 ---

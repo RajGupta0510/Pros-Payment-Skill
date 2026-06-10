@@ -11,7 +11,7 @@ process.env.MAX_HOURLY_SPEND = '100';
 process.env.MAX_DAILY_SPEND = '500';
 
 const { ethers } = require('ethers');
-const { sendPayment, sendBatchPayment, sendConditionalPayment, estimatePaymentCost, getTransactionHistory, clearTransactionHistory, checkBalance, setWallet } = require('./payment');
+const { sendPayment, sendBatchPayment, sendConditionalPayment, estimatePaymentCost, getTransactionHistory, clearTransactionHistory, checkBalance, getPharosNetworkStatus, setWallet } = require('./payment');
 const rateLimiter = require('./rateLimiter');
 
 describe('PROS Payment Skill Tests', () => {
@@ -34,7 +34,12 @@ describe('PROS Payment Skill Tests', () => {
         gasPrice: ethers.parseUnits('2', 'gwei'),
         maxFeePerGas: ethers.parseUnits('2', 'gwei')
       }),
-      getBalance: jest.fn().mockResolvedValue(ethers.parseEther('100.0'))
+      getBalance: jest.fn().mockResolvedValue(ethers.parseEther('100.0')),
+      getBlockNumber: jest.fn().mockResolvedValue(200344n),
+      getNetwork: jest.fn().mockResolvedValue({
+        chainId: 688689n,
+        name: 'pharos-atlantic'
+      })
     };
 
     mockWallet = {
@@ -591,6 +596,42 @@ describe('PROS Payment Skill Tests', () => {
       expect(thrown.name).toBe('PaymentSkillError');
       expect(thrown.errorCode).toBe('INVALID_ADDRESS');
       expect(thrown.retryable).toBe(false);
+    });
+  });
+
+  describe('Feature 9: Check Pharos Network Status', () => {
+    test('should return healthy status, block number, chain ID, and formatted gas price', async () => {
+      mockProvider.getBlockNumber = jest.fn().mockResolvedValue(250000n);
+      mockProvider.getNetwork = jest.fn().mockResolvedValue({
+        chainId: 688689n,
+        name: 'pharos-atlantic'
+      });
+      mockProvider.getFeeData = jest.fn().mockResolvedValue({
+        gasPrice: ethers.parseUnits('3', 'gwei'),
+        maxFeePerGas: ethers.parseUnits('3', 'gwei')
+      });
+
+      const result = await getPharosNetworkStatus();
+      expect(result).toEqual({
+        blockNumber: 250000,
+        chainId: '688689',
+        networkName: 'pharos-atlantic',
+        gasPricePros: '0.000000003',
+        healthy: true
+      });
+    });
+
+    test('should return healthy: false and fallbacks when RPC query fails', async () => {
+      mockProvider.getBlockNumber = jest.fn().mockRejectedValue(new Error('connection refused'));
+
+      const result = await getPharosNetworkStatus();
+      expect(result).toEqual({
+        blockNumber: 0,
+        chainId: '0',
+        networkName: 'Unknown',
+        gasPricePros: '0',
+        healthy: false
+      });
     });
   });
 });
