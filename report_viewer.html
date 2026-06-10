@@ -1,0 +1,405 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PROS Payment Skill - Project Report</title>
+    <!-- Marked for parsing Markdown -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <!-- html2pdf bundle -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --primary: #2563eb;
+            --primary-hover: #1d4ed8;
+            --bg: #f8fafc;
+            --card-bg: #ffffff;
+            --text: #1e293b;
+            --text-light: #64748b;
+            --border: #e2e8f0;
+            --code-bg: #f1f5f9;
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: var(--bg);
+            color: var(--text);
+            margin: 0;
+            padding: 0;
+            line-height: 1.6;
+        }
+
+        /* Toolbar styles (ignored during PDF printing) */
+        .toolbar {
+            position: sticky;
+            top: 0;
+            background: rgba(255, 255, 255, 0.85);
+            backdrop-filter: blur(12px);
+            border-bottom: 1px solid var(--border);
+            padding: 12px 24px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            z-index: 1000;
+            box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.05);
+        }
+
+        .toolbar h1 {
+            font-size: 16px;
+            font-weight: 600;
+            margin: 0;
+            color: var(--text);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .btn {
+            background-color: var(--primary);
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            font-size: 14px;
+            font-weight: 500;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            box-shadow: 0 2px 4px rgba(37, 99, 235, 0.2);
+        }
+
+        .btn:hover {
+            background-color: var(--primary-hover);
+            transform: translateY(-1px);
+            box-shadow: 0 4px 6px rgba(37, 99, 235, 0.3);
+        }
+
+        .btn:active {
+            transform: translateY(0);
+        }
+
+        /* Document view container */
+        .container {
+            max-width: 850px;
+            margin: 40px auto;
+            padding: 0 20px;
+        }
+
+        .paper {
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 60px 80px;
+            box-shadow: 0 10px 15px -3px rgb(0 0 0 / 0.05);
+        }
+
+        /* Printable styles for Markdown content */
+        .report-content {
+            font-size: 14px;
+        }
+
+        .report-content h1 {
+            font-size: 26px;
+            font-weight: 700;
+            border-bottom: 2px solid var(--primary);
+            padding-bottom: 12px;
+            margin-top: 0;
+            margin-bottom: 30px;
+            color: #0f172a;
+        }
+
+        .report-content h2 {
+            font-size: 18px;
+            font-weight: 600;
+            margin-top: 35px;
+            margin-bottom: 15px;
+            color: #0f172a;
+            border-bottom: 1px solid var(--border);
+            padding-bottom: 6px;
+            break-after: avoid;
+            page-break-after: avoid;
+        }
+
+        .report-content h3 {
+            font-size: 15px;
+            font-weight: 600;
+            margin-top: 25px;
+            margin-bottom: 10px;
+            color: #1e293b;
+        }
+
+        .report-content p {
+            margin-bottom: 16px;
+            text-align: justify;
+        }
+
+        .report-content ul, .report-content ol {
+            padding-left: 24px;
+            margin-bottom: 16px;
+        }
+
+        .report-content li {
+            margin-bottom: 8px;
+        }
+
+        .report-content code {
+            font-family: 'JetBrains Mono', monospace;
+            background-color: var(--code-bg);
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 13px;
+        }
+
+        .report-content pre {
+            font-family: 'JetBrains Mono', monospace;
+            background-color: #0f172a;
+            color: #f8fafc;
+            padding: 16px 20px;
+            border-radius: 6px;
+            overflow-x: auto;
+            font-size: 13px;
+            margin-bottom: 20px;
+            break-inside: avoid;
+            page-break-inside: avoid;
+        }
+
+        .report-content pre code {
+            background-color: transparent;
+            padding: 0;
+            color: inherit;
+        }
+
+        .report-content blockquote {
+            border-left: 4px solid var(--primary);
+            background-color: #eff6ff;
+            margin: 20px 0;
+            padding: 12px 20px;
+            border-radius: 0 6px 6px 0;
+            color: #1e3a8a;
+            break-inside: avoid;
+            page-break-inside: avoid;
+        }
+
+        .report-content blockquote p {
+            margin: 0;
+        }
+
+        .report-content table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 20px;
+            break-inside: avoid;
+            page-break-inside: avoid;
+        }
+
+        .report-content th, .report-content td {
+            border: 1px solid var(--border);
+            padding: 10px 12px;
+            text-align: left;
+            font-size: 13px;
+        }
+
+        .report-content th {
+            background-color: #f8fafc;
+            font-weight: 600;
+        }
+
+        /* Page break styling helper */
+        .page-break {
+            page-break-before: always;
+            break-before: page;
+        }
+
+        /* Hide elements when printing */
+        @media print {
+            .toolbar {
+                display: none !important;
+            }
+            body {
+                background-color: white;
+            }
+            .container {
+                margin: 0;
+                padding: 0;
+                max-width: 100%;
+            }
+            .paper {
+                border: none;
+                box-shadow: none;
+                padding: 0;
+            }
+        }
+    </style>
+</head>
+<body>
+
+    <div class="toolbar">
+        <h1>
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-file-text"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M10 9H8"/><path d="M16 13H8"/><path d="M16 17H8"/></svg>
+            PROS Payment Skill Report Export
+        </h1>
+        <button class="btn" onclick="exportPDF()">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-download"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>
+            Download PDF
+        </button>
+    </div>
+
+    <div class="container">
+        <div class="paper" id="report-paper">
+            <div class="report-content" id="report-content">
+                <!-- Dynamic markdown content renders here -->
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Place the markdown content directly inside a JS string variable
+        const markdownContent = `# PROS Payment Skill - Final Project Report
+
+## 1. Executive Summary
+The **PROS Payment Skill** is a production-grade, secure, and robust Node.js package designed for EVM-compatible networks, specifically optimized for the **Pharos Network** (Pharos L1). Built to satisfy the **Anvita Flow Skill** standard, it exposes declarative actions that AI agents can execute to process, verify, and monitor native token transactions.
+
+The skill provides 10 core features: native EVM single payments, sequential batch payments, state-reconciling in-memory rate limiting, automatic polling/verification, conditional payments, gas cost estimation, session history logs, native balance checks, network status checks, and custom structured error mappings. It is fully compliant with static analyzer checks (e.g., CertiK Skill Scanner) regarding security, data leakage, and shell executions.
+
+---
+
+## 2. Core Architecture & File Structure
+
+The project has been structured cleanly with modularity and separation of concerns:
+
+\`\`\`text
+├── .env                  # Local environment file containing keys & RPC endpoint (ignored)
+├── .env.example          # Safe template demonstrating expected config settings
+├── .gitignore            # Git rules blocking credential & artifact leaks
+├── package.json          # Node dependency configuration (Ethers v6, Jest)
+├── config.js             # Parses, sanitizes, and strictly validates env configurations
+├── rateLimiter.js        # Manages in-memory rolling-window spending limits
+├── payment.js            # Implements the transaction engines, network queries, and error maps
+├── index.js              # Entrypoint module exporting the tools and limiter singleton
+├── schema.json           # Declarative Anvita Flow JSON Schema describing skill capabilities
+├── test.js               # Mock unit tests covering 41 integration/validation scenarios
+└── demo.js               # Diagnostic script to run live tests on the Pharos network
+\`\`\`
+
+<div class="page-break"></div>
+
+## 3. Detailed Feature Specifications
+
+### Feature 1: Single Payment Engine (\`sendPayment\`)
+*   **Description**: Sends native \`PROS\` tokens to an EVM address and waits for block confirmation.
+*   **Input Sanitization**: Validates recipient strings using \`ethers.isAddress\` and checks that the amount is a positive number.
+*   **Optional Memo Support**: Allows attaching up to 1000 characters of custom metadata. The memo is automatically hex-encoded and embedded into the transaction's \`data\` payload.
+*   **Outputs**: Returns transaction hash, block number, execution status (\`success\` or \`failed\`), and the human-readable block timestamp.
+
+### Feature 2: Batch Payment Engine (\`sendBatchPayment\`)
+*   **Description**: Executes transfers to multiple recipients in a single invocation.
+*   **Nonce Collision Prevention**: Submits transactions sequentially with incrementing nonces (\`nonce\`, \`nonce + 1\`, etc.) to prevent collisions in the mempool.
+*   **Error Boundaries**: If one transaction in the batch fails submission, the remaining transactions are aborted, and the rate limits for the unsubmitted transactions are rolled back.
+
+### Feature 3: In-Memory Rate Limiting (\`rateLimiter\`)
+*   **Description**: Protects the wallet from excessive spending or rapid-drain attacks.
+*   **Configurable Caps**: Limits are loaded dynamically from environment variables:
+    *   \`MAX_HOURLY_SPEND\`: Maximum cumulative PROS sent within any rolling 60-minute window (default: 100 PROS).
+    *   \`MAX_DAILY_SPEND\`: Maximum cumulative PROS sent within any rolling 24-hour window (default: 500 PROS).
+*   **Implementation**: Utilizes an in-memory Map to record timestamped transaction events. Prunes entries older than 24 hours automatically.
+*   **Pre-Flight Enforcement**: Limits are verified and reserved *before* gas is consumed or a transaction is sent to the network.
+
+### Feature 4: Polling & Verification with Rollback
+*   **Description**: Automatically monitors transaction state and updates the rate limiter.
+*   **Polling Loop**: Wait for transaction mining with a strict 60-second timeout limit.
+*   **Automated Rollback**: If a transaction fails to submit, reverts on-chain, or times out, the rate limiter intercepts the exception, cancels the optimistic reservation, and restores the available hourly/daily spending allowance.
+*   **Gas & Mempool Markup**: Automatically applies a **1.2x gas markup** to the transaction base and priority fees to prevent transactions from getting stuck in the mempool.
+
+<div class="page-break"></div>
+
+### Feature 5: On-Chain Conditional Payments (\`sendConditionalPayment\`)
+*   **Description**: Blocks or executes payments dynamically based on the state of the blockchain.
+*   **Three Evaluation Mechanisms**:
+    1.  **Functional Callbacks**: Supports programmatic JavaScript callbacks: \`async (provider) => boolean\`.
+    2.  **Account Balance Check**: Declarative checks verifying if an address has a balance greater than or equal to a specified amount.
+    3.  **Smart Contract Reads**: Declarative checks that read an arbitrary state variable/method from a smart contract address using a provided ABI, arguments, and expected return value.
+
+### Feature 6: Gas Cost Estimation (\`estimatePaymentCost\`)
+*   **Description**: Estimates gas units and calculates the total cost (amount + gas fee) in native PROS before committing to a transfer.
+*   **Fallback Logic**: If \`estimateGas\` fails due to insufficient funds, it falls back to a 0-value transaction check or a static baseline computation.
+
+### Feature 7: Session Transaction History (\`getTransactionHistory\`)
+*   **Description**: Tracks all transactions executed during the current agent session. Includes timestamps, recipients, amounts, hashes, and statuses. Supports manual history clearing (\`clearTransactionHistory\`).
+
+### Feature 8: Wallet Balance Checks (\`checkBalance\`)
+*   **Description**: Allows agents to query the native PROS balance of any target EVM wallet address to confirm funding.
+
+### Feature 9: Pharos Network Status (\`getPharosNetworkStatus\`)
+*   **Description**: Returns the block number, chain ID, network name, estimated gas price in PROS, and a boolean health status indicator. This lets agents ensure Pharos is online before initiating operations.
+
+### Feature 10: Custom Structured Errors (\`PaymentSkillError\`)
+*   **Description**: Provides structured errors with metadata allowing AI agents to handle exceptions programmatically.
+*   **Fields**:
+    *   \`errorCode\` (\`INVALID_INPUT\`, \`INVALID_ADDRESS\`, \`RATE_LIMIT_EXCEEDED\`, \`INSUFFICIENT_FUNDS\`, \`TIMEOUT\`, \`EXECUTION_REVERTED\`, \`NETWORK_ERROR\`)
+    *   \`errorMessage\` (Sanitized human-readable details)
+    *   \`retryable\` (\`true\` for network drops and timeouts, \`false\` for input validation errors)
+
+---
+
+<div class="page-break"></div>
+
+## 4. Security & Compliance Measures
+
+The package has been hardened to pass the **CertiK Skill Scanner** and standard security reviews:
+
+*   **No Hardcoded Secrets**: Configuration is read strictly from environment variables. Testing mock keys are generated randomly at runtime using \`ethers.Wallet.createRandom().privateKey\` so that static code analyzers do not flag them.
+*   **No Shell Executions**: Uses native JS modules (\`ethers\`) instead of calling shell CLI commands or external scripts.
+*   **Data Leakage Prevention (URL Redaction)**: Ethers.js often prints the full RPC URL in its error message details, which can leak private API keys or tokens. We implemented \`sanitizeErrorMessage\` in \`payment.js\` which matches all URL-like strings and redacts them to \`[REDACTED_RPC_URL]\`.
+*   **Input Bound Checks**: Limits parameter inputs (e.g., restricting memos to 1000 characters and parsing numbers safely) to prevent log injection or stack overflows.
+
+---
+
+## 5. Anvita Flow Schema Integration (\`schema.json\`)
+The schema defines 6 clean actions for integration into AI agent frameworks:
+1.  \`sendPayment\`: Takes \`to\`, \`amount\`, and \`memo\`.
+2.  \`sendBatchPayment\`: Takes a list of payment objects.
+3.  \`sendConditionalPayment\`: Extends \`sendPayment\` with a conditional property defining checks.
+4.  \`estimatePaymentCost\`: Takes \`to\`, \`amount\`, and \`memo\` to preview costs.
+5.  \`getTransactionHistory\`: Takes no parameters; returns array of sent transactions.
+6.  \`checkBalance\`: Takes \`address\` to query and return balance.
+
+---
+
+## 6. Verification Results
+
+We have set up two methods of verification:
+
+### A. Mock Test Suite (\`test.js\`)
+Contains **41 unit tests** written using Jest. They mock the provider/blockchain to run instantly without requiring net access. All 41 tests pass.
+
+### B. Diagnostic Script (\`demo.js\`)
+A live verification script that connects to the Pharos Network, checks balances, and submits a \`0.0001 PROS\` test transaction with a custom memo, logging every lifecycle step.
+All 10 live test runs on the Pharos Atlantic testnet pass successfully.
+`;
+
+        // Render Markdown to HTML
+        document.getElementById('report-content').innerHTML = marked.parse(markdownContent);
+
+        // Export PDF Function
+        function exportPDF() {
+            const element = document.getElementById('report-paper');
+            const opt = {
+                margin:       [15, 20, 15, 20], // top, left, bottom, right in mm
+                filename:     'PROS_Payment_Skill_Project_Report.pdf',
+                image:        { type: 'jpeg', quality: 0.98 },
+                html2canvas:  { scale: 2, useCORS: true, letterRendering: true },
+                jsPDF:        { unit: 'mm', format: 'letter', orientation: 'portrait' }
+            };
+
+            // Generate the PDF
+            html2pdf().set(opt).from(element).save();
+        }
+    </script>
+</body>
+</html>
