@@ -1,0 +1,26 @@
+{
+  "name": "pros-payment-skill",
+  "version": "1.0.0",
+  "description": "PROS Payment Skill for EVM-compatible Pharos Network",
+  "main": "index.js",
+  "type": "commonjs",
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "ethers": "^6.13.1"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0"
+  },
+  "scripts": {
+    "test": "jest"
+  },
+  "keywords": [
+    "pros",
+    "pharos",
+    "payment",
+    "skill",
+    "ethers"
+  ],
+  "author": "",
+  "license": "ISC"
+}

@@ -1,0 +1,227 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "name": "pros-payment-skill",
+  "version": "1.0.0",
+  "description": "PROS Payment Skill for EVM-compatible Pharos L1 Network, with built-in input validation, transaction status polling, and rate limiting.",
+  "tools": [
+    {
+      "name": "sendPayment",
+      "description": "Sends PROS tokens to a single recipient EVM address with an optional memo.",
+      "input": {
+        "type": "object",
+        "properties": {
+          "to": {
+            "type": "string",
+            "description": "The recipient's 20-byte EVM address (hex format, 0x-prefixed)",
+            "pattern": "^0x[0-9a-fA-F]{40}$"
+          },
+          "amount": {
+            "type": "string",
+            "description": "Amount of PROS tokens to send (must be positive, e.g., '10.5')"
+          },
+          "memo": {
+            "type": "string",
+            "description": "Optional transfer memo or metadata (up to 1000 characters)"
+          }
+        },
+        "required": ["to", "amount"]
+      },
+      "output": {
+        "type": "object",
+        "properties": {
+          "txHash": {
+            "type": "string",
+            "description": "Hex hash of the sent transaction"
+          },
+          "blockNumber": {
+            "type": "integer",
+            "description": "The block number in which the transaction was mined"
+          },
+          "status": {
+            "type": "string",
+            "enum": ["success", "failed"],
+            "description": "Confirmation status of the payment"
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time",
+            "description": "ISO 8601 timestamp of block confirmation"
+          }
+        },
+        "required": ["txHash", "blockNumber", "status", "timestamp"]
+      }
+    },
+    {
+      "name": "sendBatchPayment",
+      "description": "Sends PROS tokens to multiple recipients in a single invocation using sequential transactions with manual nonce tracking.",
+      "input": {
+        "type": "object",
+        "properties": {
+          "payments": {
+            "type": "array",
+            "description": "List of payments to execute in this batch",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "properties": {
+                "to": {
+                  "type": "string",
+                  "description": "Recipient EVM address (hex format, 0x-prefixed)",
+                  "pattern": "^0x[0-9a-fA-F]{40}$"
+                },
+                "amount": {
+                  "type": "string",
+                  "description": "Amount of PROS tokens to send"
+                },
+                "memo": {
+                  "type": "string",
+                  "description": "Optional memo for this transfer"
+                }
+              },
+              "required": ["to", "amount"]
+            }
+          }
+        },
+        "required": ["payments"]
+      },
+      "output": {
+        "type": "array",
+        "description": "Array of receipt results for each payment execution",
+        "items": {
+          "type": "object",
+          "properties": {
+            "to": {
+              "type": "string",
+              "description": "Recipient EVM address"
+            },
+            "amount": {
+              "type": "string",
+              "description": "Transfer amount in PROS"
+            },
+            "memo": {
+              "type": "string",
+              "nullable": true,
+              "description": "Transfer memo if provided"
+            },
+            "txHash": {
+              "type": "string",
+              "description": "Hex transaction hash of the execution"
+            },
+            "blockNumber": {
+              "type": "integer",
+              "description": "The block number in which the transaction was mined"
+            },
+            "gasUsed": {
+              "type": "string",
+              "description": "Gas amount consumed by the transaction execution"
+            },
+            "status": {
+              "type": "string",
+              "enum": ["success", "failed"],
+              "description": "Confirmation status of the transaction"
+            },
+            "timestamp": {
+              "type": "string",
+              "format": "date-time",
+              "description": "ISO 8601 timestamp of block confirmation"
+            },
+            "error": {
+              "type": "string",
+              "nullable": true,
+              "description": "Detailed error message if execution failed"
+            }
+          },
+          "required": ["to", "amount", "txHash", "status"]
+      }
+    },
+    {
+      "name": "sendConditionalPayment",
+      "description": "Sends PROS tokens to a recipient address only if a specified on-chain condition (such as wallet balance or smart contract read state) is met.",
+      "input": {
+        "type": "object",
+        "properties": {
+          "to": {
+            "type": "string",
+            "description": "The recipient's 20-byte EVM address (hex format, 0x-prefixed)",
+            "pattern": "^0x[0-9a-fA-F]{40}$"
+          },
+          "amount": {
+            "type": "string",
+            "description": "Amount of PROS tokens to send (must be positive, e.g., '10.5')"
+          },
+          "memo": {
+            "type": "string",
+            "description": "Optional transfer memo or metadata (up to 1000 characters)"
+          },
+          "condition": {
+            "type": "object",
+            "description": "Declarative on-chain check structure",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": ["balance", "contractCall"],
+                "description": "The type of condition check"
+              },
+              "targetAddress": {
+                "type": "string",
+                "description": "EVM address for the balance check type",
+                "pattern": "^0x[0-9a-fA-F]{40}$"
+              },
+              "minBalance": {
+                "type": "string",
+                "description": "Minimum balance required in PROS"
+              },
+              "address": {
+                "type": "string",
+                "description": "Target smart contract address for contractCall check",
+                "pattern": "^0x[0-9a-fA-F]{40}$"
+              },
+              "abi": {
+                "type": "array",
+                "description": "The JSON ABI array containing the target method"
+              },
+              "method": {
+                "type": "string",
+                "description": "Method name of the contract read call"
+              },
+              "args": {
+                "type": "array",
+                "description": "Arguments to pass to the method"
+              },
+              "expected": {
+                "type": "string",
+                "description": "The expected value to compare equality against"
+              }
+            },
+            "required": ["type"]
+          }
+        },
+        "required": ["to", "amount", "condition"]
+      },
+      "output": {
+        "type": "object",
+        "properties": {
+          "txHash": {
+            "type": "string",
+            "description": "Hex hash of the sent transaction"
+          },
+          "blockNumber": {
+            "type": "integer",
+            "description": "The block number in which the transaction was mined"
+          },
+          "status": {
+            "type": "string",
+            "enum": ["success", "failed"],
+            "description": "Confirmation status of the payment"
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time",
+            "description": "ISO 8601 timestamp of block confirmation"
+          }
+        },
+        "required": ["txHash", "blockNumber", "status", "timestamp"]
+      }
+    }
+  ]
+}
