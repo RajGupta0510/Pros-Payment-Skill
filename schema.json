@@ -222,6 +222,91 @@
         },
         "required": ["txHash", "blockNumber", "status", "timestamp"]
       }
+    },
+    {
+      "name": "estimatePaymentCost",
+      "description": "Estimates the gas units, gas price, and total cost in PROS for a potential transaction without executing it.",
+      "input": {
+        "type": "object",
+        "properties": {
+          "to": {
+            "type": "string",
+            "description": "The recipient's 20-byte EVM address (hex format, 0x-prefixed)",
+            "pattern": "^0x[0-9a-fA-F]{40}$"
+          },
+          "amount": {
+            "type": "string",
+            "description": "Amount of PROS tokens to send (must be positive, e.g., '10.5')"
+          },
+          "memo": {
+            "type": "string",
+            "description": "Optional transfer memo or metadata (up to 1000 characters)"
+          }
+        },
+        "required": ["to", "amount"]
+      },
+      "output": {
+        "type": "object",
+        "properties": {
+          "gasLimit": {
+            "type": "string",
+            "description": "Estimated gas units (limit) for the transaction"
+          },
+          "gasPrice": {
+            "type": "string",
+            "description": "Current gas price in Wei"
+          },
+          "gasCost": {
+            "type": "string",
+            "description": "Estimated gas cost in PROS tokens"
+          },
+          "totalCost": {
+            "type": "string",
+            "description": "Estimated total cost (amount + gasCost) in PROS tokens"
+          }
+        },
+        "required": ["gasLimit", "gasPrice", "gasCost", "totalCost"]
+      }
+    },
+    {
+      "name": "getTransactionHistory",
+      "description": "Returns the history of all native transactions attempted or completed during the current session.",
+      "input": {
+        "type": "object",
+        "properties": {}
+      },
+      "output": {
+        "type": "array",
+        "description": "Array of transaction history records from the current session",
+        "items": {
+          "type": "object",
+          "properties": {
+            "txHash": {
+              "type": "string",
+              "description": "Hex hash of the transaction"
+            },
+            "timestamp": {
+              "type": "string",
+              "format": "date-time",
+              "description": "ISO 8601 timestamp of transaction transmission or block confirmation"
+            },
+            "recipient": {
+              "type": "string",
+              "description": "Recipient's 20-byte EVM address"
+            },
+            "amount": {
+              "type": "string",
+              "description": "Amount of PROS tokens transferred"
+            },
+            "status": {
+              "type": "string",
+              "enum": ["pending", "success", "failed"],
+              "description": "Transaction session lifecycle status"
+            }
+          },
+          "required": ["txHash", "timestamp", "recipient", "amount", "status"]
+        }
+      }
     }
   ]
 }

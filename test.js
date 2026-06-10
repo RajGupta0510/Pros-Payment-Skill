@@ -11,7 +11,7 @@ process.env.MAX_HOURLY_SPEND = '100';
 process.env.MAX_DAILY_SPEND = '500';
 
 const { ethers } = require('ethers');
-const { sendPayment, sendBatchPayment, sendConditionalPayment, setWallet } = require('./payment');
+const { sendPayment, sendBatchPayment, sendConditionalPayment, estimatePaymentCost, getTransactionHistory, clearTransactionHistory, setWallet } = require('./payment');
 const rateLimiter = require('./rateLimiter');
 
 describe('PROS Payment Skill Tests', () => {
@@ -23,11 +23,16 @@ describe('PROS Payment Skill Tests', () => {
   beforeEach(() => {
     // Reset rate limiter history before each test
     rateLimiter.reset();
+    clearTransactionHistory();
 
     // Setup fresh mock provider and wallet
     mockProvider = {
       getBlock: jest.fn().mockResolvedValue({
         timestamp: 1718020000 // June 2026 mock timestamp
+      }),
+      getFeeData: jest.fn().mockResolvedValue({
+        gasPrice: ethers.parseUnits('2', 'gwei'),
+        maxFeePerGas: ethers.parseUnits('2', 'gwei')
       })
     };
 
@@ -36,24 +41,27 @@ describe('PROS Payment Skill Tests', () => {
       provider: mockProvider,
       getAddress: jest.fn().mockResolvedValue(mockAddr),
       getNonce: jest.fn().mockResolvedValue(5),
+      estimateGas: jest.fn().mockResolvedValue(21000n),
       sendTransaction: jest.fn().mockImplementation((tx) => {
         const valStr = ethers.formatEther(tx.value);
+        const nonceVal = tx.nonce !== undefined ? tx.nonce : 5;
+        const mockHash = '0x' + nonceVal.toString().padStart(64, 'a');
 
         return Promise.resolve({
-          hash: '0x' + 'a'.repeat(64),
-          nonce: tx.nonce !== undefined ? tx.nonce : 5,
+          hash: mockHash,
+          nonce: nonceVal,
           wait: jest.fn().mockImplementation(async (confirmations, timeout) => {
             if (valStr === '99.0') {
               const err = new Error('timeout waiting for transaction');
               err.code = 'TIMEOUT';
-              err.transactionHash = '0x' + 'a'.repeat(64);
+              err.transactionHash = mockHash;
               throw err;
             }
             if (valStr === '66.0') {
               throw new Error('execution reverted');
             }
             return {
-              hash: '0x' + 'a'.repeat(64),
+              hash: mockHash,
               blockNumber: 100023,
               status: 1, // 1 = success, 0 = failed
               gasUsed: 21000n,
@@ -358,4 +366,140 @@ describe('PROS Payment Skill Tests', () => {
       contractSpy.mockRestore();
     });
   });
+
+  describe('Feature 6: Estimate Payment Cost', () => {
+    test('should successfully estimate gas and total cost', async () => {
+      const result = await estimatePaymentCost({
+        to: recipient,
+        amount: '10.0',
+        memo: 'Hello PROS'
+      });
+
+      expect(result).toEqual({
+        gasLimit: '21000',
+        gasPrice: '2000000000',
+        gasCost: '0.000042',
+        totalCost: '10.000042'
+      });
+
+      expect(mockWallet.estimateGas).toHaveBeenCalledWith(expect.objectContaining({
+        to: recipient,
+        value: ethers.parseEther('10.0'),
+        data: ethers.hexlify(ethers.toUtf8Bytes('Hello PROS'))
+      }));
+    });
+
+    test('should validate input parameters', async () => {
+      await expect(estimatePaymentCost({ to: 'invalid-address', amount: '10' }))
+        .rejects.toThrow('Validation Error: "invalid-address" is not a valid EVM address.');
+
+      await expect(estimatePaymentCost({ to: recipient, amount: '-1' }))
+        .rejects.toThrow('Validation Error: Amount must be a positive number.');
+    });
+
+    test('should fallback to 0 value estimation if first estimateGas fails', async () => {
+      mockWallet.estimateGas = jest.fn()
+        .mockRejectedValueOnce(new Error('insufficient funds'))
+        .mockResolvedValueOnce(21000n);
+
+      const result = await estimatePaymentCost({
+        to: recipient,
+        amount: '10.0',
+        memo: 'Hello PROS'
+      });
+
+      expect(result.gasLimit).toBe('21000');
+      expect(mockWallet.estimateGas).toHaveBeenNthCalledWith(1, expect.objectContaining({ value: ethers.parseEther('10.0') }));
+      expect(mockWallet.estimateGas).toHaveBeenNthCalledWith(2, expect.objectContaining({ value: 0n }));
+    });
+
+    test('should fallback to static estimation if both estimateGas calls fail', async () => {
+      mockWallet.estimateGas = jest.fn()
+        .mockRejectedValue(new Error('revert'));
+
+      const result = await estimatePaymentCost({
+        to: recipient,
+        amount: '10.0',
+        memo: 'Hello'
+      });
+
+      expect(result.gasLimit).toBe('21080');
+    });
+  });
+
+  describe('Feature 7: Transaction History', () => {
+    test('should start with empty history', async () => {
+      const history = await getTransactionHistory();
+      expect(history).toEqual([]);
+    });
+
+    test('should record successful single payments in history', async () => {
+      const result = await sendPayment({
+        to: recipient,
+        amount: '10.0',
+        memo: 'Test transaction history'
+      });
+
+      const history = await getTransactionHistory();
+      expect(history).toHaveLength(1);
+      expect(history[0]).toEqual({
+        txHash: result.txHash,
+        recipient,
+        amount: '10.0',
+        status: 'success',
+        timestamp: result.timestamp
+      });
+    });
+
+    test('should record failed single payments in history', async () => {
+      // Amount 66.0 is configured in mock to revert
+      await expect(sendPayment({ to: recipient, amount: '66.0' }))
+        .rejects.toThrow();
+
+      const history = await getTransactionHistory();
+      expect(history).toHaveLength(1);
+      expect(history[0]).toEqual({
+        txHash: expect.stringMatching(/^0x[a-f0-9]{64}$/),
+        recipient,
+        amount: '66.0',
+        status: 'failed',
+        timestamp: expect.any(String)
+      });
+    });
+
+    test('should record successful batch payments in history', async () => {
+      const payments = [
+        { to: recipient, amount: '5.0', memo: 'Batch P1' },
+        { to: '0x2222222222222222222222222222222222222222', amount: '15.0', memo: 'Batch P2' }
+      ];
+
+      const receipts = await sendBatchPayment({ payments });
+
+      const history = await getTransactionHistory();
+      expect(history).toHaveLength(2);
+      expect(history[0]).toEqual(expect.objectContaining({
+        txHash: receipts[0].txHash,
+        recipient: payments[0].to,
+        amount: '5.0',
+        status: 'success'
+      }));
+      expect(history[1]).toEqual(expect.objectContaining({
+        txHash: receipts[1].txHash,
+        recipient: payments[1].to,
+        amount: '15.0',
+        status: 'success'
+      }));
+    });
+
+    test('should support clearing history manually', async () => {
+      await sendPayment({ to: recipient, amount: '10.0' });
+      let history = await getTransactionHistory();
+      expect(history).toHaveLength(1);
+
+      clearTransactionHistory();
+      history = await getTransactionHistory();
+      expect(history).toHaveLength(0);
+    });
+  });
 });
+

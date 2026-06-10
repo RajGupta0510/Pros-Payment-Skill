@@ -2,6 +2,28 @@ const { ethers } = require('ethers');
 const config = require('./config');
 const rateLimiter = require('./rateLimiter');
 
+// Session transaction history
+const transactionHistory = new Map();
+
+function recordHistory(txHash, details) {
+  transactionHistory.set(txHash, {
+    txHash,
+    timestamp: details.timestamp || new Date().toISOString(),
+    recipient: details.recipient,
+    amount: details.amount.toString(),
+    status: details.status || 'pending'
+  });
+}
+
+function clearTransactionHistory() {
+  transactionHistory.clear();
+}
+
+async function getTransactionHistory() {
+  return Array.from(transactionHistory.values());
+}
+
+
 /**
  * Truncates a string to prevent log injection or overflow from untrusted inputs.
  * @param {*} val Value to check
@@ -102,16 +124,23 @@ async function sendPayment({ to, amount, memo }) {
   // 3. Record transaction in rate limiter (optimistically)
   const recordTs = rateLimiter.record(senderAddress, amount);
 
+  let tx;
   try {
     // 4. Construct transaction payload
     const val = ethers.parseEther(amount.toString());
     const data = memo ? ethers.hexlify(ethers.toUtf8Bytes(memo)) : '0x';
 
     // 5. Submit transaction
-    const tx = await currentWallet.sendTransaction({
+    tx = await currentWallet.sendTransaction({
       to,
       value: val,
       data
+    });
+
+    recordHistory(tx.hash, {
+      recipient: to,
+      amount,
+      status: 'pending'
     });
 
     // 6. Poll for confirmation (with 60-second timeout)
@@ -121,15 +150,32 @@ async function sendPayment({ to, amount, memo }) {
     const block = await currentWallet.provider.getBlock(receipt.blockNumber);
     const timestamp = block ? new Date(block.timestamp * 1000).toISOString() : new Date().toISOString();
 
+    const status = receipt.status === 1 ? 'success' : 'failed';
+    recordHistory(receipt.hash, {
+      timestamp,
+      recipient: to,
+      amount,
+      status
+    });
+
     return {
       txHash: receipt.hash,
       blockNumber: receipt.blockNumber,
-      status: receipt.status === 1 ? 'success' : 'failed',
+      status,
       timestamp
     };
   } catch (err) {
     // 8. Rollback rate limiter on failure
     rateLimiter.rollback(senderAddress, amount, recordTs);
+
+    const failedHash = err.transactionHash || (tx && tx.hash);
+    if (failedHash) {
+      recordHistory(failedHash, {
+        recipient: to,
+        amount,
+        status: 'failed'
+      });
+    }
 
     // 9. Handle errors gracefully with clear messages
     if (err.code === 'TIMEOUT' || err.message.includes('timeout')) {
@@ -191,6 +237,12 @@ async function sendBatchPayment({ payments }) {
           nonce: currentNonce++
         });
         submittedTxes.push({ tx, payment });
+
+        recordHistory(tx.hash, {
+          recipient: payment.to,
+          amount: payment.amount,
+          status: 'pending'
+        });
       } catch (submitErr) {
         // Rollback unsubmitted amount from rate limiter
         const failedAmount = payments.slice(i).reduce((sum, p) => sum + parseFloat(p.amount), 0);
@@ -209,6 +261,15 @@ async function sendBatchPayment({ payments }) {
         const receipt = await tx.wait(1, 60000);
         const block = await currentWallet.provider.getBlock(receipt.blockNumber);
         const timestamp = block ? new Date(block.timestamp * 1000).toISOString() : new Date().toISOString();
+        const status = receipt.status === 1 ? 'success' : 'failed';
+
+        recordHistory(receipt.hash, {
+          timestamp,
+          recipient: payment.to,
+          amount: payment.amount,
+          status
+        });
+
         return {
           to: payment.to,
           amount: payment.amount,
@@ -216,10 +277,16 @@ async function sendBatchPayment({ payments }) {
           txHash: receipt.hash,
           blockNumber: receipt.blockNumber,
           gasUsed: receipt.gasUsed.toString(),
-          status: receipt.status === 1 ? 'success' : 'failed',
+          status,
           timestamp
         };
       } catch (waitErr) {
+        recordHistory(tx.hash, {
+          recipient: payment.to,
+          amount: payment.amount,
+          status: 'failed'
+        });
+
         return {
           to: payment.to,
           amount: payment.amount,
@@ -345,10 +412,72 @@ async function sendConditionalPayment({ to, amount, memo, condition }) {
   return sendPayment({ to, amount, memo });
 }
 
+/**
+ * Estimates the gas and total cost in PROS for a potential payment.
+ * @param {Object} params Payment details
+ * @param {string} params.to Recipient EVM address
+ * @param {number|string} params.amount Amount in PROS tokens
+ * @param {string} [params.memo] Optional memo to attach
+ * @returns {Promise<{gasLimit: string, gasPrice: string, gasCost: string, totalCost: string}>} Cost breakdown
+ */
+async function estimatePaymentCost({ to, amount, memo }) {
+  // 1. Validate inputs
+  validatePaymentInput(to, amount, memo);
+
+  const currentWallet = getActiveWallet();
+  const val = ethers.parseEther(amount.toString());
+  const data = memo ? ethers.hexlify(ethers.toUtf8Bytes(memo)) : '0x';
+
+  // 2. Fetch gas price
+  let gasPrice = ethers.parseUnits('1', 'gwei');
+  try {
+    const feeData = await currentWallet.provider.getFeeData();
+    gasPrice = feeData.gasPrice ?? feeData.maxFeePerGas ?? gasPrice;
+  } catch (feeErr) {
+    // Ignore error and use fallback
+  }
+
+  // 3. Estimate gas limit
+  let gasLimit;
+  try {
+    gasLimit = await currentWallet.estimateGas({
+      to,
+      value: val,
+      data
+    });
+  } catch (err) {
+    try {
+      gasLimit = await currentWallet.estimateGas({
+        to,
+        value: 0n,
+        data
+      });
+    } catch (err2) {
+      const dataLen = memo ? ethers.toUtf8Bytes(memo).length : 0;
+      gasLimit = 21000n + BigInt(dataLen * 16);
+    }
+  }
+
+  // 4. Calculate costs
+  const gasCostWei = gasLimit * gasPrice;
+  const gasCost = ethers.formatEther(gasCostWei);
+  const totalCost = ethers.formatEther(val + gasCostWei);
+
+  return {
+    gasLimit: gasLimit.toString(),
+    gasPrice: gasPrice.toString(),
+    gasCost,
+    totalCost
+  };
+}
+
 module.exports = {
   sendPayment,
   sendBatchPayment,
   sendConditionalPayment,
+  estimatePaymentCost,
+  getTransactionHistory,
+  clearTransactionHistory,
   setWallet,
   getActiveWallet
 };
