@@ -24,6 +24,32 @@ async function getTransactionHistory() {
 }
 
 /**
+ * Custom robust polling helper to wait for transaction confirmation.
+ * Bypasses ethers event subscription issues by querying getTransactionReceipt directly.
+ */
+async function waitForConfirmation(provider, tx, timeoutMs = 60000, pollIntervalMs = 2000) {
+  if (!provider || typeof provider.getTransactionReceipt !== 'function') {
+    return tx.wait(1, timeoutMs);
+  }
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    try {
+      const receipt = await provider.getTransactionReceipt(tx.hash);
+      if (receipt) {
+        return receipt;
+      }
+    } catch (err) {
+      // Ignore transient RPC errors during polling
+    }
+    await new Promise(resolve => setTimeout(resolve, pollIntervalMs));
+  }
+  const timeoutErr = new Error('timeout waiting for transaction confirmation');
+  timeoutErr.code = 'TIMEOUT';
+  timeoutErr.transactionHash = tx.hash;
+  throw timeoutErr;
+}
+
+/**
  * Custom Error class for payment skill errors providing structured metadata.
  */
 class PaymentSkillError extends Error {
@@ -192,10 +218,13 @@ async function sendPayment({ to, amount, memo }) {
       try {
         const feeData = await currentWallet.provider.getFeeData();
         if (feeData.maxFeePerGas) {
-          txParams.maxFeePerGas = feeData.maxFeePerGas * 12n / 10n;
-          txParams.maxPriorityFeePerGas = (feeData.maxPriorityFeePerGas ?? ethers.parseUnits('1', 'gwei')) * 12n / 10n;
+          const priority = feeData.maxPriorityFeePerGas && feeData.maxPriorityFeePerGas > 0n 
+            ? feeData.maxPriorityFeePerGas * 15n / 10n 
+            : ethers.parseUnits('1.5', 'gwei');
+          txParams.maxPriorityFeePerGas = priority;
+          txParams.maxFeePerGas = (feeData.maxFeePerGas * 15n / 10n) + priority;
         } else if (feeData.gasPrice) {
-          txParams.gasPrice = feeData.gasPrice * 12n / 10n;
+          txParams.gasPrice = feeData.gasPrice * 15n / 10n;
         }
       } catch (feeErr) {
         // Fallback to auto-estimation if RPC feeData query fails
@@ -211,7 +240,7 @@ async function sendPayment({ to, amount, memo }) {
       });
 
       // 6. Poll for confirmation (with 60-second timeout)
-      const receipt = await tx.wait(1, 60000);
+      const receipt = await waitForConfirmation(currentWallet.provider, tx, 60000);
 
       // 7. Fetch block timestamp
       const block = await currentWallet.provider.getBlock(receipt.blockNumber);
@@ -242,6 +271,30 @@ async function sendPayment({ to, amount, memo }) {
           amount,
           status: 'failed'
         });
+      }
+
+      // If the transaction timed out, attempt to cancel it to clear the mempool for subsequent runs
+      if (err.code === 'TIMEOUT' || err.message.includes('timeout')) {
+        try {
+          const feeData = await currentWallet.provider.getFeeData();
+          const cancelParams = {
+            to: senderAddress,
+            value: 0n,
+            nonce: tx ? tx.nonce : (await currentWallet.getNonce()) - 1
+          };
+          if (feeData.maxFeePerGas) {
+            cancelParams.maxFeePerGas = feeData.maxFeePerGas * 20n / 10n;
+            cancelParams.maxPriorityFeePerGas = (feeData.maxPriorityFeePerGas ?? ethers.parseUnits('1', 'gwei')) * 20n / 10n;
+          } else if (feeData.gasPrice) {
+            cancelParams.gasPrice = feeData.gasPrice * 20n / 10n;
+          } else {
+            cancelParams.gasPrice = ethers.parseUnits('20', 'gwei');
+          }
+          const cancelTx = await currentWallet.sendTransaction(cancelParams);
+          await waitForConfirmation(currentWallet.provider, cancelTx, 15000);
+        } catch (cancelErr) {
+          // Silence cancellation errors to preserve original timeout error reporting
+        }
       }
 
       // Map to exact custom error prefix expected by tests
@@ -301,9 +354,9 @@ async function sendBatchPayment({ payments }) {
     // 4. Record transaction in rate limiter (optimistically)
     recordTs = rateLimiter.record(senderAddress, totalAmount);
 
-    const submittedTxes = [];
+    const receipts = [];
     try {
-      // 5. Submit transactions sequentially using manual nonce increment to avoid collisions
+      // 5. Submit and verify transactions sequentially
       let currentNonce = await currentWallet.getNonce();
 
       // Query fee data once for the batch to avoid repeated RPC round-trips
@@ -328,16 +381,19 @@ async function sendBatchPayment({ payments }) {
 
         if (feeData) {
           if (feeData.maxFeePerGas) {
-            txParams.maxFeePerGas = feeData.maxFeePerGas * 12n / 10n;
-            txParams.maxPriorityFeePerGas = (feeData.maxPriorityFeePerGas ?? ethers.parseUnits('1', 'gwei')) * 12n / 10n;
+            const priority = feeData.maxPriorityFeePerGas && feeData.maxPriorityFeePerGas > 0n 
+              ? feeData.maxPriorityFeePerGas * 15n / 10n 
+              : ethers.parseUnits('1.5', 'gwei');
+            txParams.maxPriorityFeePerGas = priority;
+            txParams.maxFeePerGas = (feeData.maxFeePerGas * 15n / 10n) + priority;
           } else if (feeData.gasPrice) {
-            txParams.gasPrice = feeData.gasPrice * 12n / 10n;
+            txParams.gasPrice = feeData.gasPrice * 15n / 10n;
           }
         }
 
+        let tx;
         try {
-          const tx = await currentWallet.sendTransaction(txParams);
-          submittedTxes.push({ tx, payment });
+          tx = await currentWallet.sendTransaction(txParams);
 
           recordHistory(tx.hash, {
             recipient: payment.to,
@@ -345,7 +401,7 @@ async function sendBatchPayment({ payments }) {
             status: 'pending'
           });
         } catch (submitErr) {
-          // Rollback unsubmitted amount from rate limiter
+          // Rollback this and all subsequent unsubmitted payments from rate limiter
           const failedAmount = payments.slice(i).reduce((sum, p) => sum + parseFloat(p.amount), 0);
           rateLimiter.rollback(senderAddress, totalAmount, recordTs);
           const successAmount = totalAmount - failedAmount;
@@ -354,12 +410,10 @@ async function sendBatchPayment({ payments }) {
           }
           throw new PaymentSkillError('EXECUTION_REVERTED', `Batch submission failed at index ${i}: ${sanitizeErrorMessage(submitErr.message)}`, false);
         }
-      }
 
-      // 6. Poll for confirmation in parallel
-      const receiptPromises = submittedTxes.map(async ({ tx, payment }) => {
+        // Wait for confirmation of this transaction before proceeding to the next one
         try {
-          const receipt = await tx.wait(1, 60000);
+          const receipt = await waitForConfirmation(currentWallet.provider, tx, 60000);
           const block = await currentWallet.provider.getBlock(receipt.blockNumber);
           const timestamp = block ? new Date(block.timestamp * 1000).toISOString() : new Date().toISOString();
           const status = receipt.status === 1 ? 'success' : 'failed';
@@ -371,7 +425,7 @@ async function sendBatchPayment({ payments }) {
             status
           });
 
-          return {
+          receipts.push({
             to: payment.to,
             amount: payment.amount,
             memo: payment.memo || null,
@@ -380,7 +434,18 @@ async function sendBatchPayment({ payments }) {
             gasUsed: receipt.gasUsed.toString(),
             status,
             timestamp
-          };
+          });
+
+          if (status === 'failed') {
+            // Halt batch processing on on-chain execution failure
+            const remainingAmount = payments.slice(i).reduce((sum, p) => sum + parseFloat(p.amount), 0);
+            rateLimiter.rollback(senderAddress, totalAmount, recordTs);
+            const successAmount = totalAmount - remainingAmount;
+            if (successAmount > 0) {
+              rateLimiter.record(senderAddress, successAmount, recordTs);
+            }
+            break;
+          }
         } catch (waitErr) {
           recordHistory(tx.hash, {
             recipient: payment.to,
@@ -388,32 +453,47 @@ async function sendBatchPayment({ payments }) {
             status: 'failed'
           });
 
-          return {
+          receipts.push({
             to: payment.to,
             amount: payment.amount,
             memo: payment.memo || null,
             txHash: tx.hash,
             status: 'failed',
             error: waitErr.message
-          };
-        }
-      });
+          });
 
-      const receipts = await Promise.all(receiptPromises);
+          // Attempt to cancel the stuck transaction to clear the mempool for subsequent runs
+          if (waitErr.code === 'TIMEOUT' || waitErr.message.includes('timeout')) {
+            try {
+              const feeData = await currentWallet.provider.getFeeData();
+              const cancelParams = {
+                to: senderAddress,
+                value: 0n,
+                nonce: tx.nonce
+              };
+              if (feeData.maxFeePerGas) {
+                cancelParams.maxFeePerGas = feeData.maxFeePerGas * 20n / 10n;
+                cancelParams.maxPriorityFeePerGas = (feeData.maxPriorityFeePerGas ?? ethers.parseUnits('1', 'gwei')) * 20n / 10n;
+              } else if (feeData.gasPrice) {
+                cancelParams.gasPrice = feeData.gasPrice * 20n / 10n;
+              } else {
+                cancelParams.gasPrice = ethers.parseUnits('20', 'gwei');
+              }
+              const cancelTx = await currentWallet.sendTransaction(cancelParams);
+              await waitForConfirmation(currentWallet.provider, cancelTx, 15000);
+            } catch (cancelErr) {
+              // Silence cancellation errors
+            }
+          }
 
-      // 7. Reconcile rate limiter for any failed transactions in the batch
-      let totalFailedAmount = 0;
-      for (const r of receipts) {
-        if (r.status === 'failed') {
-          totalFailedAmount += parseFloat(r.amount);
-        }
-      }
-
-      if (totalFailedAmount > 0) {
-        rateLimiter.rollback(senderAddress, totalAmount, recordTs);
-        const finalSuccessAmount = totalAmount - totalFailedAmount;
-        if (finalSuccessAmount > 0) {
-          rateLimiter.record(senderAddress, finalSuccessAmount, recordTs);
+          // Halt batch processing on timeout or verification failure
+          const remainingAmount = payments.slice(i).reduce((sum, p) => sum + parseFloat(p.amount), 0);
+          rateLimiter.rollback(senderAddress, totalAmount, recordTs);
+          const successAmount = totalAmount - remainingAmount;
+          if (successAmount > 0) {
+            rateLimiter.record(senderAddress, successAmount, recordTs);
+          }
+          break;
         }
       }
 
@@ -628,10 +708,19 @@ async function getPharosNetworkStatus() {
     const gasPrice = feeData.gasPrice ?? feeData.maxFeePerGas ?? ethers.parseUnits('1', 'gwei');
     const gasPricePros = ethers.formatEther(gasPrice);
 
+    let networkName = network.name || 'Pharos Network';
+    if (networkName === 'unknown' || networkName === '') {
+      if (network.chainId === 688689n) {
+        networkName = 'Atlantic Testnet';
+      } else {
+        networkName = 'Pharos Network';
+      }
+    }
+
     return {
       blockNumber: Number(blockNumber),
       chainId: network.chainId.toString(),
-      networkName: network.name || 'Pharos Network',
+      networkName,
       gasPricePros,
       healthy: true
     };
