@@ -162,6 +162,11 @@ describe('PROS Payment Skill Tests', () => {
       await expect(sendPayment({ to: recipient, amount: '0' }))
         .rejects.toThrow('Validation Error: Amount must be a positive number.');
     });
+
+    test('should validate amount format is valid', async () => {
+      await expect(sendPayment({ to: recipient, amount: '10.0abc' }))
+        .rejects.toThrow('Validation Error: Amount has an invalid format. Got: "10.0abc"');
+    });
   });
 
   describe('Feature 2: Batch Payment', () => {
@@ -317,6 +322,21 @@ describe('PROS Payment Skill Tests', () => {
       })).rejects.toThrow('Condition Not Met: Payment aborted.');
     });
 
+    test('should abort payment and throw error if declarative balance check minBalance is invalid', async () => {
+      const condition = {
+        type: 'balance',
+        targetAddress: mockAddr,
+        minBalance: '2.0abc'
+      };
+
+      await expect(sendConditionalPayment({
+        to: recipient,
+        amount: '10.0',
+        memo: 'Cond balance invalid minBalance',
+        condition
+      })).rejects.toThrow('Invalid balance check condition: "minBalance" has an invalid format.');
+    });
+
     test('should execute payment if declarative contractCall check is met', async () => {
       const mockContract = {
         someMethod: jest.fn().mockResolvedValue('foo')
@@ -370,6 +390,24 @@ describe('PROS Payment Skill Tests', () => {
       })).rejects.toThrow('Condition Not Met: Payment aborted.');
       
       contractSpy.mockRestore();
+    });
+
+    test('should abort payment and throw error if declarative contractCall expected is missing', async () => {
+      const condition = {
+        type: 'contractCall',
+        address: '0x1234567890123456789012345678901234567890',
+        abi: [],
+        method: 'someMethod',
+        args: [123]
+        // expected is missing
+      };
+
+      await expect(sendConditionalPayment({
+        to: recipient,
+        amount: '10.0',
+        memo: 'Cond contract missing expected',
+        condition
+      })).rejects.toThrow('Invalid contractCall condition: "expected" is required.');
     });
   });
 

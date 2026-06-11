@@ -166,6 +166,12 @@ function validatePaymentInput(to, amount, memo) {
     throw new PaymentSkillError('INVALID_INPUT', `Validation Error: Amount must be a positive number. Got: "${truncateInput(amount)}"`, false);
   }
 
+  try {
+    ethers.parseEther(amount.toString());
+  } catch (err) {
+    throw new PaymentSkillError('INVALID_INPUT', `Validation Error: Amount has an invalid format. Got: "${truncateInput(amount)}"`, false);
+  }
+
   if (memo !== undefined && memo !== null) {
     if (typeof memo !== 'string') {
       throw new PaymentSkillError('INVALID_INPUT', 'Validation Error: "memo" must be a string.', false);
@@ -536,6 +542,11 @@ async function evalCondition(provider, condition) {
       if (minBalance === undefined || isNaN(parseFloat(minBalance))) {
         throw new PaymentSkillError('INVALID_INPUT', 'Invalid balance check condition: "minBalance" must be a valid number representation.', false);
       }
+      try {
+        ethers.parseEther(minBalance.toString());
+      } catch (err) {
+        throw new PaymentSkillError('INVALID_INPUT', 'Invalid balance check condition: "minBalance" has an invalid format.', false);
+      }
       const balance = await provider.getBalance(targetAddress);
       const minBalanceWei = ethers.parseEther(minBalance.toString());
       return balance >= minBalanceWei;
@@ -551,6 +562,9 @@ async function evalCondition(provider, condition) {
       }
       if (!method || typeof method !== 'string') {
         throw new PaymentSkillError('INVALID_INPUT', 'Invalid contractCall condition: "method" must be a valid method name string.', false);
+      }
+      if (expected === undefined || expected === null) {
+        throw new PaymentSkillError('INVALID_INPUT', 'Invalid contractCall condition: "expected" is required.', false);
       }
       
       const contract = new ethers.Contract(address, abi, provider);
