@@ -112,3 +112,6 @@ Thumbs.db
 *.njsproj
 *.sln
 *.sw?
+
+# Report Viewer
+report_viewer.html
