@@ -300,9 +300,9 @@ This codebase is designed and audited against standard **CertiK Skill Scanner** 
 
 During verified dry runs on the **Pharos Atlantic Testnet**, the payment skill successfully connected and broadcasted live transactions.
 
-*   **Verified Test Transaction Hash**: `0xe577239420ab6a2a07c126510bb45952f4c9c11c1b18181a6c892cb8827f32d8`
+*   **Verified Test Transaction Hash**: `0x35b764752b368e3ca187dce30bae559eddb59c01ce0f3c14706e310e4aa0ad65`
 *   **Network**: Pharos Atlantic Testnet (Chain ID: `688689`)
-*   **Gas Used**: `21,080` units
+*   **Gas Used**: `21,000` units
 *   **Native Value Transferred**: `0.0001` PROS
 
 ---
