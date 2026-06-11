@@ -8,6 +8,9 @@
     "dotenv": "^16.4.5",
     "ethers": "^6.13.1"
   },
+  "overrides": {
+    "ws": "^8.20.1"
+  },
   "devDependencies": {
     "jest": "^29.7.0"
   },
