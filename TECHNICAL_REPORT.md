@@ -21,7 +21,7 @@ The project has been structured cleanly with modularity and separation of concer
 ├── payment.js            # Implements the transaction engines, network queries, and error maps
 ├── index.js              # Entrypoint module exporting the tools and limiter singleton
 ├── schema.json           # Declarative Anvita Flow JSON Schema describing skill capabilities
-├── test.js               # Mock unit tests covering 41 integration/validation scenarios
+├── test.js               # Mock unit tests covering 44 integration/validation scenarios
 └── demo.js               # Diagnostic script to run live tests on the Pharos network
 ```
 
@@ -121,7 +121,7 @@ The schema defines 6 clean actions for integration into AI agent frameworks:
 We have set up two methods of verification:
 
 ### A. Mock Test Suite (`test.js`)
-Contains **41 unit tests** written using Jest. They mock the provider/blockchain to run instantly without requiring net access. All 41 tests pass:
+Contains **44 tests** written using Jest. They mock the provider/blockchain to run instantly without requiring net access. All 44 tests pass:
 
 *   **Config checks**: Verifies validations for malformed inputs.
 *   **Payment validations**: Tests correct transaction construction, status mapping, and timestamp conversion.
