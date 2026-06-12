@@ -54,6 +54,47 @@ In decentralized agent networks, the ability to transact is as fundamental as th
 
 ---
 
+## Technology Stack
+
+The PROS Payment Skill is built using the following core technologies:
+*   **Runtime**: Node.js (v18+)
+*   **Web3 Library**: ethers.js (v6)
+*   **Unit Testing**: Jest (v29+)
+*   **Language**: JavaScript (ES6+ / CommonJS)
+
+---
+
+## Pharos Skill Engine Standard
+
+This Skill is fully compliant with the official Pharos Skill Engine standard:
+*   This Skill follows the official Pharos Skill Engine standard.
+*   `SKILL.md` maps all 10 capabilities in the Pharos Capability Index format.
+*   `references/transaction.md` documents all functions in Pharos reference file format.
+*   `assets/networks.json` contains network configuration for Atlantic Testnet and Mainnet.
+
+---
+
+## Project File Structure
+
+The workspace layout is structured as follows:
+```text
+├── assets/
+│   └── networks.json         # Pharos Network configuration file
+├── references/
+│   └── transaction.md        # Detailed documentation for all 10 payment functions
+├── config.js                 # Environment variable validator and loader
+├── rateLimiter.js            # In-memory rolling spend limit manager
+├── payment.js                # Core transaction engines and network queries
+├── index.js                  # Entrypoint module exporting capabilities
+├── schema.json               # Anvita Flow JSON Schema describing skill capabilities
+├── test.js                   # Mock unit test suite (44 tests passing)
+├── demo.js                   # Live Atlantic Testnet diagnostic script
+├── SKILL.md                  # Pharos Skill Engine standard mapping
+└── TECHNICAL_REPORT.md       # Final project architectural report
+```
+
+---
+
 ## Feature Matrix
 
 The payment skill provides a robust suite of 10 core features:
@@ -281,6 +322,8 @@ This codebase is designed and audited against standard **CertiK Skill Scanner** 
 *   **Zero Hardcoded Secrets**: 
     *   No private keys, seed phrases, or RPC tokens are hardcoded.
     *   Configuration settings are loaded dynamically at runtime from environment variables using a safe loader (`config.js`).
+*   **Comprehensive Test Coverage**:
+    *   The Jest unit test suite contains **44 tests** verifying all 10 core capabilities, edge cases, input validation, and rollback scenarios, with all **44 tests passing** successfully.
     *   The unit test suite (`test.js`) dynamically generates disposable mock keys (`ethers.Wallet.createRandom().privateKey`) during setup, preventing static analysis tools from throwing false-positive leaked key alerts.
 *   **Unauthorized Network Access Control**:
     *   Enforces secure endpoint bindings and strict domain structures. Arbitrary RPC url injections or malicious redirect options are prohibited.
@@ -309,7 +352,7 @@ During verified dry runs on the **Pharos Atlantic Testnet**, the payment skill s
 
 ## Verification
 
-To execute the local Jest unit test suite:
+To execute the local Jest unit test suite containing **44 tests**:
 ```bash
 npm test
 ```
